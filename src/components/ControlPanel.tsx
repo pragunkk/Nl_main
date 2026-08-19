@@ -19,7 +19,7 @@ interface ControlPanelProps {
   onResourceClick: (resource: Resource) => void;
   onStartTutorial: () => void;
   agent: any;
-  onRestartJourney: () => void;
+  onRestartJourney: () => Promise<any>;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -759,12 +759,30 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 <h3 className="text-xl font-bold text-gray-900">Journey History</h3>
                 <p className="text-sm text-gray-400 mt-0.5">Your learning assimilation over time</p>
               </div>
-              <button
-                onClick={() => setShowPolylineListModal(false)}
-                className="p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={async () => {
+                    try {
+                      // Delegate reset to parent so it refreshes state correctly
+                      await onRestartJourney();
+                      setShowPolylineListModal(false);
+                    } catch (e) {
+                      console.error('Failed to clear history', e);
+                      alert('Failed to clear history');
+                    }
+                  }}
+                  className="px-3 py-1 text-xs text-red-600 bg-red-50 border border-red-100 rounded-md hover:bg-red-100"
+                >
+                  Clear History
+                </button>
+
+                <button
+                  onClick={() => setShowPolylineListModal(false)}
+                  className="p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Timeline Body */}

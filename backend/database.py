@@ -166,44 +166,47 @@ def get_lectures():
     return db.get("lectures", [])
 
 def reset_session_data(session_id):
-    """Resets all progress, rewards, polylines and summaries for a specific session."""
+    """Archive and clear history for a specific session while preserving lessons and global metrics."""
     db = load_db()
-    
-    # 1. Reset session state
+
+    # Ensure archive structure exists
+    if "history_archive" not in db:
+        db["history_archive"] = {}
+
+    if session_id not in db["history_archive"]:
+        db["history_archive"][session_id] = {"summaries": [], "polylines": [], "archived_at": int(datetime.now().timestamp() * 1000)}
+
+    # Archive summaries that belong to this session (ids are like summary_{session_id}_...)
+    if "summaries" in db:
+        session_summaries = [s for s in db["summaries"] if str(s.get("id", "")).startswith(f"summary_{session_id}_")]
+        if session_summaries:
+            db["history_archive"][session_id]["summaries"].extend(session_summaries)
+            db["summaries"] = [s for s in db["summaries"] if not str(s.get("id", "")).startswith(f"summary_{session_id}_")]
+
+    # Archive polylines created by summaries (polyline_... ids) but keep global metrics like 'high_line' or 'current_average'
+    polyline_keys = list(db.get("polylines", {}).keys())
+    for k in polyline_keys:
+        if k.startswith("polyline_"):
+            db["history_archive"][session_id]["polylines"].append({"id": k, "data": db["polylines"][k]})
+            del db["polylines"][k]
+
+    # Reset only the session runtime state (visited resources / rewards)
+    # Keep bookmarks, notes, lectures intact. This clears progress but preserves lesson data and global metrics.
     db["learning_sessions"][session_id] = {
         'position': {'x': 10, 'y': 10},
         'level': 0,
         'totalReward': 0,
         'visitedResources': [],
         'notifications': [
-            { 
-              'id': f'reset_{int(datetime.now().timestamp())}', 
-              'type': 'info', 
-              'message': 'Intelligence Journey restarted. System recalibrated.', 
-              'timestamp': int(datetime.now().timestamp() * 1000), 
-              'read': False 
+            {
+                'id': f'reset_{int(datetime.now().timestamp())}',
+                'type': 'info',
+                'message': 'Learning history cleared. Journey logs archived.',
+                'timestamp': int(datetime.now().timestamp() * 1000),
+                'read': False
             }
         ]
     }
-    
-    # 2. Clear polylines related to this session (including current_average)
-    # We remove the average polyline and any session-specific polylines
-    keys_to_remove = ['current_average']
-    for k in list(db["polylines"].keys()):
-        if f"_{session_id}_" in k or k.startswith(f"polyline_{session_id}"):
-            keys_to_remove.append(k)
-    
-    for k in keys_to_remove:
-        if k in db["polylines"]:
-            del db["polylines"][k]
-            
-    # 3. Clear summaries for this session
-    if "summaries" in db:
-        db["summaries"] = [s for s in db["summaries"] if session_id not in s.get("id", "")]
-        
-    # 4. Clear bookmarks for this session
-    if "bookmarks" in db and session_id in db["bookmarks"]:
-        db["bookmarks"][session_id] = []
-        
+
     save_db(db)
     return db["learning_sessions"][session_id]

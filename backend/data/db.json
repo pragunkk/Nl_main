@@ -11,10 +11,10 @@
             "visitedResources": [],
             "notifications": [
                 {
-                    "id": "reset_1787136837",
+                    "id": "reset_1788540865",
                     "type": "info",
                     "message": "Learning history cleared. Journey logs archived.",
-                    "timestamp": 1787136837175,
+                    "timestamp": 1788540865923,
                     "read": false
                 }
             ]
@@ -66,6 +66,46 @@
                     "totalReward": 50,
                     "xp_earned": 25,
                     "timestamp": 1787136800168
+                },
+                {
+                    "id": "summary_default_20260904_222114",
+                    "title": "intro",
+                    "summary": "i know everything about this",
+                    "keywords_found": [],
+                    "totalResources": 19,
+                    "visitedResources": 0,
+                    "currentLevel": 1,
+                    "strengths": [],
+                    "recommendations": [
+                        "Pre training objectives",
+                        "Pre trained models",
+                        "Fine tuning LLM"
+                    ],
+                    "ai_analysis": "Learning profile enriched by modules like Basics. Stage 1 achieved with 25 points.",
+                    "avgDifficulty": 0,
+                    "totalReward": 25,
+                    "xp_earned": 25,
+                    "timestamp": 1788540674392
+                },
+                {
+                    "id": "summary_default_20260904_222146",
+                    "title": "advanced",
+                    "summary": "i understand everything in this",
+                    "keywords_found": [],
+                    "totalResources": 19,
+                    "visitedResources": 0,
+                    "currentLevel": 1,
+                    "strengths": [],
+                    "recommendations": [
+                        "Pre training objectives",
+                        "Pre trained models",
+                        "Fine tuning LLM"
+                    ],
+                    "ai_analysis": "Learning profile enriched by modules like Basics. Stage 1 achieved with 50 points.",
+                    "avgDifficulty": 0,
+                    "totalReward": 50,
+                    "xp_earned": 25,
+                    "timestamp": 1788540706625
                 }
             ],
             "polylines": [
@@ -926,6 +966,106 @@
                         "assimilation_position": {
                             "x": 1,
                             "y": 18
+                        },
+                        "next_recommendation": {
+                            "id": "1",
+                            "title": "Pre training objectives",
+                            "position": {
+                                "x": 1.2320508075688776,
+                                "y": 18.5
+                            },
+                            "module": "Pre training objectives",
+                            "reason": "fallback"
+                        }
+                    }
+                },
+                {
+                    "id": "polyline_20260904_222114",
+                    "data": {
+                        "id": "polyline_20260904_222114",
+                        "name": "intro",
+                        "path": [],
+                        "color": "rgba(150, 104, 255, 0.4)",
+                        "isActive": false,
+                        "summary": "i know everything about this",
+                        "keywords_found": [],
+                        "module_scores": [
+                            0.07036370784044266,
+                            0.054375793784856796,
+                            0.06803614646196365,
+                            0.09165891259908676,
+                            0.17930001020431519,
+                            0.07876504957675934,
+                            0.25674182176589966,
+                            0.18707552552223206,
+                            0.11539492756128311,
+                            0.15826503932476044,
+                            0.05841581150889397,
+                            0.09749259799718857,
+                            0.10965075343847275,
+                            0.09985031187534332,
+                            0.09403996169567108,
+                            0.12337066233158112,
+                            0.11200488358736038,
+                            0.1377703696489334,
+                            0.13457490503787994
+                        ],
+                        "strengths": [],
+                        "dominant_topics": [],
+                        "ai_analysis": "Learning profile enriched by modules like Basics. Stage 1 achieved with 25 points.",
+                        "assimilation_position": {
+                            "x": 2,
+                            "y": 17
+                        },
+                        "next_recommendation": {
+                            "id": "1",
+                            "title": "Pre training objectives",
+                            "position": {
+                                "x": 1.2320508075688776,
+                                "y": 18.5
+                            },
+                            "module": "Pre training objectives",
+                            "reason": "fallback"
+                        }
+                    }
+                },
+                {
+                    "id": "polyline_20260904_222146",
+                    "data": {
+                        "id": "polyline_20260904_222146",
+                        "name": "advanced",
+                        "path": [],
+                        "color": "rgba(103, 146, 255, 0.4)",
+                        "isActive": false,
+                        "summary": "i understand everything in this",
+                        "keywords_found": [],
+                        "module_scores": [
+                            0.12603141367435455,
+                            0.08787133544683456,
+                            0.09556689858436584,
+                            0.15436936914920807,
+                            0.16127559542655945,
+                            0.09116251766681671,
+                            0.17550089955329895,
+                            0.1292620301246643,
+                            0.053396593779325485,
+                            0.11350253969430923,
+                            0.11886192113161087,
+                            0.16163860261440277,
+                            0.12652882933616638,
+                            0.06967722624540329,
+                            0.11753944307565689,
+                            0.10136175155639648,
+                            0.23268073797225952,
+                            0.12244497239589691,
+                            0.14391840994358063
+                        ],
+                        "strengths": [],
+                        "dominant_topics": [],
+                        "ai_analysis": "Learning profile enriched by modules like Basics. Stage 1 achieved with 50 points.",
+                        "assimilation_position": {
+                            "x": 2,
+                            "y": 17
                         },
                         "next_recommendation": {
                             "id": "1",

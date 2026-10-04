@@ -37,7 +37,7 @@ const GridMatrixPage: React.FC = () => {
 
   const [resources, setResources] = useState<Resource[]>([]);
   const [polylines, setPolylines] = useState<Polyline[]>([]);
-  const [learningPath, setLearningPath] = useState<string[]>([]);
+  const [learningPath, setLearningPath] = useState<GridPosition[]>([]);
   const [dqnPathInfo, setDqnPathInfo] = useState<{ resource: Resource | null, reward: number } | null>(null);
   const [learningData, setLearningData] = useState<LearningSummary>({
     totalResources: 0,
@@ -133,7 +133,7 @@ const GridMatrixPage: React.FC = () => {
       visitResource(resource.id, resource.reward);
       await globalVisitResource(resource.id);
       
-      setLearningPath(prev => [...prev, resource.title]);
+      setLearningPath(prev => [...prev, resource.position]);
 
       setLearningData(prev => ({
         ...prev,
@@ -309,19 +309,11 @@ const GridMatrixPage: React.FC = () => {
   const handlePlayPath = useCallback(() => {
     if (learningPath.length < 2) return;
 
-    // Reconstruct path from titles
-    const path: GridPosition[] = [];
-    learningPath.forEach(title => {
-      const resource = resources.find(r => r.title === title);
-      const pos = resource ? resource.position : null;
-      if (pos) path.push(pos);
-    });
-
-    if (path.length > 0) {
-      setPlaybackPath(path);
+    if (learningPath.length > 1) {
+      setPlaybackPath(learningPath);
       setIsPlaying(true);
     }
-  }, [learningPath, resources]);
+  }, [learningPath]);
 
   const handleRestartJourney = useCallback(async () => {
     if (!window.confirm("Are you sure you want to restart your Intelligence Journey? This will clear all learning progress and summaries.")) {

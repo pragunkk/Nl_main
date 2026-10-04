@@ -27,6 +27,7 @@ interface GridVisualizationProps {
 }
 
 const GRID_SIZE = 20;
+const MAP_SIZE = 1000;
 
 const ResourceIcon = ({ type }: { type: Resource['type'] }) => {
   const iconProps = { size: 14, className: "text-white drop-shadow-sm" };
@@ -99,11 +100,55 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
   const [showAssimilationPath, setShowAssimilationPath] = useState(false);
   const gridRef = React.useRef<HTMLDivElement>(null);
 
+  const coordinateBounds = React.useMemo(() => {
+    const points = resources.length > 0
+      ? [...resources.map(resource => resource.position), agent.position]
+      : [agent.position];
+    const xValues = points.map(point => point.x);
+    const yValues = points.map(point => point.y);
+    const minX = Math.min(...xValues);
+    const maxX = Math.max(...xValues);
+    const minY = Math.min(...yValues);
+    const maxY = Math.max(...yValues);
+    const paddingX = Math.max((maxX - minX) * 0.12, 0.25);
+    const paddingY = Math.max((maxY - minY) * 0.12, 0.25);
+
+    return {
+      minX: minX - paddingX,
+      maxX: maxX + paddingX,
+      minY: minY - paddingY,
+      maxY: maxY + paddingY,
+    };
+  }, [agent.position, assimilationPoints, playbackPath, polylines, resources]);
+
+  const mapPoint = React.useCallback((point: GridPosition) => ({
+    x: ((point.x - coordinateBounds.minX) / (coordinateBounds.maxX - coordinateBounds.minX)) * MAP_SIZE,
+    y: ((point.y - coordinateBounds.minY) / (coordinateBounds.maxY - coordinateBounds.minY)) * MAP_SIZE,
+  }), [coordinateBounds]);
+
+  const mapPercent = React.useCallback((point: GridPosition) => {
+    const mapped = mapPoint(point);
+    return { left: `${mapped.x / MAP_SIZE * 100}%`, top: `${mapped.y / MAP_SIZE * 100}%` };
+  }, [mapPoint]);
+
+  const mapGridPoint = React.useCallback((point: GridPosition) => ({
+    x: (point.x + 0.5) * (MAP_SIZE / GRID_SIZE),
+    y: (point.y + 0.5) * (MAP_SIZE / GRID_SIZE),
+  }), []);
+
+  const mapGridPercent = React.useCallback((point: GridPosition) => {
+    const mapped = mapGridPoint(point);
+    return { left: `${mapped.x / MAP_SIZE * 100}%`, top: `${mapped.y / MAP_SIZE * 100}%` };
+  }, [mapGridPoint]);
+
   // Auto-scroll to agent on load or movement
   React.useEffect(() => {
     if (gridRef.current && agent.position) {
-      const scrollY = (agent.position.y * (1000 / GRID_SIZE) * zoomLevel) - (gridRef.current.clientHeight / 2);
-      const scrollX = (agent.position.x * (1000 / GRID_SIZE) * zoomLevel) - (gridRef.current.clientWidth / 2);
+      const mappedAgent = mapPoint(agent.position);
+      const maxScrollY = gridRef.current.scrollHeight - gridRef.current.clientHeight;
+      const maxScrollX = gridRef.current.scrollWidth - gridRef.current.clientWidth;
+      const scrollY = Math.max(0, Math.min(maxScrollY, (mappedAgent.y * zoomLevel) - (gridRef.current.clientHeight / 2)));
+      const scrollX = Math.max(0, Math.min(maxScrollX, (mappedAgent.x * zoomLevel) - (gridRef.current.clientWidth / 2)));
 
       gridRef.current.scrollTo({
         top: scrollY,
@@ -111,7 +156,7 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
         behavior: 'smooth'
       });
     }
-  }, [agent.position.x, agent.position.y, zoomLevel]);
+  }, [agent.position.x, agent.position.y, mapPoint, zoomLevel]);
 
   // Build the assimilation path from polyline assimilation positions
   // This traces how the user's average assimilation evolved over time
@@ -199,7 +244,15 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
   }, [isPlaying, playbackPath, onPlaybackComplete]);
 
   const handleCellClick = (x: number, y: number) => {
-    const resource = resources.find(r => r.position.x === x && r.position.y === y);
+    const worldPosition = {
+      x: coordinateBounds.minX + ((x + 0.5) / GRID_SIZE) * (coordinateBounds.maxX - coordinateBounds.minX),
+      y: coordinateBounds.minY + ((y + 0.5) / GRID_SIZE) * (coordinateBounds.maxY - coordinateBounds.minY),
+    };
+    const resource = resources.find(r => {
+      const mapped = mapPoint(r.position);
+      return Math.floor(mapped.x / (MAP_SIZE / GRID_SIZE)) === x &&
+        Math.floor(mapped.y / (MAP_SIZE / GRID_SIZE)) === y;
+    });
     if (resource) {
       setSelectedResource(resource);
 
@@ -211,16 +264,23 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
       onResourceClick(resource, true); // Always skipMove = true for manual clicks
     } else {
       // Clicks on empty cells no longer move the agent (logic moved to GridMatrixPage to ignore)
-      onAgentMove({ x, y });
+      onAgentMove(worldPosition);
     }
   };
 
   const renderNeuralRoad = () => {
     return polylines.filter(p => p.isActive).map(polyline => (
-      <svg key={polyline.id} className="absolute inset-0 w-full h-full pointer-events-none z-10">
+      <svg
+        key={polyline.id}
+        className="absolute inset-0 w-full h-full pointer-events-none z-[25]"
+        viewBox={`0 0 ${MAP_SIZE} ${MAP_SIZE}`}
+        preserveAspectRatio="none"
+      >
         <path
-          d={polyline.path.map((pos, i) =>
-            `${i === 0 ? 'M' : 'L'} ${(pos.x + 0.5) * 50} ${(pos.y + 0.5) * 50}`
+          d={polyline.path.map((pos, i) => {
+            const mapped = mapPoint(pos);
+            return `${i === 0 ? 'M' : 'L'} ${mapped.x} ${mapped.y}`;
+          }
           ).join(' ')}
           fill="none"
           stroke={polyline.color}
@@ -230,8 +290,10 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
           className="opacity-20 filter blur-[2px]"
         />
         <path
-          d={polyline.path.map((pos, i) =>
-            `${i === 0 ? 'M' : 'L'} ${(pos.x + 0.5) * 50} ${(pos.y + 0.5) * 50}`
+          d={polyline.path.map((pos, i) => {
+            const mapped = mapPoint(pos);
+            return `${i === 0 ? 'M' : 'L'} ${mapped.x} ${mapped.y}`;
+          }
           ).join(' ')}
           fill="none"
           stroke={polyline.color}
@@ -249,18 +311,17 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
   const renderAssimilationPath = () => {
     if (assimilationPath.length < 2) return null;
 
-    const CELL_SIZE = 1000 / GRID_SIZE;
-    const HALF_CELL = CELL_SIZE / 2;
-
     // Build quadratic Bézier segments between consecutive visited resources
     const segments: { d: string; idx: number }[] = [];
     for (let i = 0; i < assimilationPath.length - 1; i++) {
       const p1 = assimilationPath[i];
       const p2 = assimilationPath[i + 1];
-      const x1 = p1.x * CELL_SIZE + HALF_CELL;
-      const y1 = p1.y * CELL_SIZE + HALF_CELL;
-      const x2 = p2.x * CELL_SIZE + HALF_CELL;
-      const y2 = p2.y * CELL_SIZE + HALF_CELL;
+      const start = mapGridPoint(p1);
+      const end = mapGridPoint(p2);
+      const x1 = start.x;
+      const y1 = start.y;
+      const x2 = end.x;
+      const y2 = end.y;
 
       // Arc perpendicular offset
       const dx = x2 - x1;
@@ -275,14 +336,15 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
 
     // Full polyline path for the moving dot
     const fullPath = assimilationPath.map((p, i) => {
-      const px = p.x * CELL_SIZE + HALF_CELL;
-      const py = p.y * CELL_SIZE + HALF_CELL;
+      const mapped = mapGridPoint(p);
+      const px = mapped.x;
+      const py = mapped.y;
       return `${i === 0 ? 'M' : 'L'} ${px} ${py}`;
     }).join(' ');
 
     return (
-      <div className="absolute inset-0 z-15 pointer-events-none">
-        <svg width="100%" height="100%" viewBox="0 0 1000 1000" className="overflow-visible">
+      <div className="absolute inset-4 z-[15] pointer-events-none">
+        <svg width="100%" height="100%" viewBox={`0 0 ${MAP_SIZE} ${MAP_SIZE}`} className="overflow-visible">
           <defs>
             <linearGradient id="assimPathGrad" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stopColor="#06b6d4" />
@@ -322,7 +384,6 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
               strokeLinecap="round"
               strokeDasharray="6 4"
               markerEnd="url(#assimArrow)"
-              filter="url(#assimGlow)"
               opacity="0.7"
             >
               <animate
@@ -337,8 +398,9 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
 
           {/* Waypoint dots at each visited resource */}
           {assimilationPath.map((p, i) => {
-            const px = p.x * CELL_SIZE + HALF_CELL;
-            const py = p.y * CELL_SIZE + HALF_CELL;
+            const mapped = mapGridPoint(p);
+            const px = mapped.x;
+            const py = mapped.y;
             return (
               <g key={`wp-${i}`}>
                 <circle cx={px} cy={py} r="5" fill="white" stroke="#8b5cf6" strokeWidth="2" opacity="0.9" />
@@ -350,7 +412,7 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
           })}
 
           {/* Animated traveling dot along the full path */}
-          <circle r="4" fill="#ec4899" filter="url(#assimGlow)">
+          <circle r="4" fill="#ec4899">
             <animateMotion dur={`${Math.max(3, assimilationPath.length * 1.2)}s`} repeatCount="indefinite">
               <mpath href="#assimFullPath" />
             </animateMotion>
@@ -364,20 +426,17 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
   const renderPlaybackOverlay = () => {
     if (!isPlaying || playbackPath.length < 2) return null;
 
-    // Convert grid coordinates to percentages (assuming 1fr grid)
-    // Grid matches 1000x1000px container
-    const CELL_SIZE = 1000 / GRID_SIZE;
-    const HALF_CELL = CELL_SIZE / 2;
-
     const pathSegments = [];
     for (let i = 0; i < playbackPath.length - 1; i++) {
       const start = playbackPath[i];
       const end = playbackPath[i + 1];
 
-      const x1 = start.x * CELL_SIZE + HALF_CELL;
-      const y1 = start.y * CELL_SIZE + HALF_CELL;
-      const x2 = end.x * CELL_SIZE + HALF_CELL;
-      const y2 = end.y * CELL_SIZE + HALF_CELL;
+      const mappedStart = mapPoint(start);
+      const mappedEnd = mapPoint(end);
+      const x1 = mappedStart.x;
+      const y1 = mappedStart.y;
+      const x2 = mappedEnd.x;
+      const y2 = mappedEnd.y;
 
       // Calculate control point for arc
       // Midpoint
@@ -401,8 +460,8 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
     }
 
     return (
-      <div className="absolute inset-0 z-50 pointer-events-none">
-        <svg width="100%" height="100%" viewBox="0 0 1000 1000" className="overflow-visible">
+      <div className="absolute inset-4 z-50 pointer-events-none">
+        <svg width="100%" height="100%" viewBox={`0 0 ${MAP_SIZE} ${MAP_SIZE}`} className="overflow-visible">
           <defs>
             <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
               <feGaussianBlur stdDeviation="2" result="blur" />
@@ -437,7 +496,6 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
                   strokeLinecap="round"
                   strokeDasharray="8 6"
                   markerEnd="url(#arrowhead-swallowtail)"
-                  filter="url(#glow)"
                   strokeDashoffset={dashLen * (1 - segmentProgress)}
                 />
               </g>
@@ -454,7 +512,9 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
     // 1. Render interactive background cells for clicking
     for (let y = 0; y < GRID_SIZE; y++) {
       for (let x = 0; x < GRID_SIZE; x++) {
-        const isAgent = Math.round(agent.position.x) === x && Math.round(agent.position.y) === y;
+        const mappedAgent = mapPoint(agent.position);
+        const isAgent = Math.floor(mappedAgent.x / (MAP_SIZE / GRID_SIZE)) === x &&
+          Math.floor(mappedAgent.y / (MAP_SIZE / GRID_SIZE)) === y;
 
         cells.push(
           <div
@@ -508,8 +568,7 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
           key={`res-${resource.id}`}
           className={`absolute transition-all duration-500 ${showTooltip ? 'z-[100]' : 'z-30'}`}
           style={{
-            left: `${(resource.position.x + 0.5) * (100 / GRID_SIZE)}%`,
-            top: `${(resource.position.y + 0.5) * (100 / GRID_SIZE)}%`,
+            ...mapPercent(resource.position),
             width: `${100 / GRID_SIZE}%`,
             height: `${100 / GRID_SIZE}%`,
             transform: 'translate(-50%, -50%)'
@@ -604,32 +663,7 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
         </div>
       );
     });
-    const assimilationNodes = (assimilationPoints || []).map((ap, index) => {
-      const left = (ap.position.x + 0.5) * (100 / GRID_SIZE);
-      const top = (ap.position.y + 0.5) * (100 / GRID_SIZE);
-      return (
-        <motion.div
-          key={`ap-${ap.id}-${index}`}
-          className="absolute z-20 pointer-events-none"
-          style={{ left: `${left}%`, top: `${top}%` }}
-          initial={{ scale: 0, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-        >
-          <div className="relative -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
-            <div className="absolute -top-8 text-white text-[10px] font-bold px-2.5 py-1 rounded-md shadow-xl whitespace-nowrap" style={{ backgroundColor: ap.color }}>
-              {ap.label}
-              <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 transform rotate-45" style={{ backgroundColor: ap.color }}></div>
-            </div>
-            <div 
-              className="w-4 h-4 rounded-full border-2 border-white shadow-lg animate-pulse"
-              style={{ backgroundColor: ap.color, boxShadow: `0 0 15px ${ap.color}80` }}
-            />
-          </div>
-        </motion.div>
-      );
-    });
-
-    return [...cells, ...resourceNodes, ...assimilationNodes];
+    return [...cells, ...resourceNodes];
   };
 
   return (
@@ -828,88 +862,81 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
             </div>
 
 
-            {/* {renderNeuralRoad()} */}
+            {renderNeuralRoad()}
             {showAssimilationPath && renderAssimilationPath()}
             {renderGrid()}
             {renderPlaybackOverlay()}
 
             {/* Assimilation Point Markers */}
-            {assimilationPoints.map((point) => (
-              <motion.div
-                key={`assim-${point.id}`}
-                className="absolute z-35 pointer-events-none flex items-center justify-center"
-                initial={{ opacity: 0, scale: 0 }}
-                animate={{
-                  opacity: 1,
-                  scale: 1,
-                  left: `${(point.position.x + 0.5) * (100 / GRID_SIZE)}%`,
-                  top: `${(point.position.y + 0.5) * (100 / GRID_SIZE)}%`,
-                }}
-                transition={{ type: 'spring', damping: 20, stiffness: 100, delay: 0.2 }}
-                style={{
-                  width: `${100 / GRID_SIZE}%`,
-                  height: `${100 / GRID_SIZE}%`,
-                  x: '-50%',
-                  y: '-50%',
-                }}
-              >
-                {/* Outer animated glow ring */}
+            <div className="absolute inset-4 z-[35] pointer-events-none">
+              {assimilationPoints.map((point) => (
                 <motion.div
-                  className="absolute rounded-full"
-                  style={{
-                    width: '36px',
-                    height: '36px',
-                    background: `radial-gradient(circle, ${point.color}40 0%, transparent 70%)`,
-                  }}
+                  key={`assim-${point.id}`}
+                  className="absolute flex items-center justify-center"
+                  initial={{ opacity: 0, scale: 0 }}
                   animate={{
-                    scale: [1, 1.6, 1],
-                    opacity: [0.6, 0.15, 0.6],
+                    opacity: 1,
+                    scale: 1,
+                    ...mapGridPercent(point.position),
                   }}
-                  transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
-                />
-                {/* Icon/Marker Rendering */}
-                {point.id === 'current_average' ? (
-                  /* Avatar Icon for Average Knowledge */
-                  <div className="relative w-10 h-10 rounded-full border-2 border-white shadow-xl overflow-hidden bg-white p-0.5 animate-in zoom-in-50 duration-500">
-                    <img
-                      src={avatar}
-                      alt="Current Average"
-                      className="w-full h-full rounded-full object-cover"
-                    />
-                    <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-blue-500 border border-white rounded-full shadow-sm" />
-                  </div>
-                ) : (
-                  /* Standard Diamond for Peak Potential */
-                  <div
-                    className="relative w-5 h-5 flex items-center justify-center"
-                    style={{ transform: 'rotate(45deg)' }}
-                  >
-                    <div
-                      className="w-4 h-4 rounded-sm shadow-lg border-2 border-white"
-                      style={{ backgroundColor: point.color }}
-                    />
-                  </div>
-                )}
-                {/* Label tooltip below */}
-                <div
-                  className="absolute top-[calc(100%+2px)] left-1/2 -translate-x-1/2 whitespace-nowrap"
+                  transition={{ type: 'spring', damping: 20, stiffness: 100, delay: 0.2 }}
+                  style={{
+                    width: `${100 / GRID_SIZE}%`,
+                    height: `${100 / GRID_SIZE}%`,
+                    x: '-50%',
+                    y: '-50%',
+                  }}
                 >
-                  <span
-                    className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md shadow-sm border"
+                  <motion.div
+                    className="absolute rounded-full"
                     style={{
-                      color: point.color,
-                      backgroundColor: `${point.color}10`,
-                      borderColor: `${point.color}30`,
+                      width: '36px',
+                      height: '36px',
+                      background: `radial-gradient(circle, ${point.color}40 0%, transparent 70%)`,
                     }}
-                  >
-                    {point.label}
-                  </span>
-                </div>
-              </motion.div>
-            ))}
+                    animate={{
+                      scale: [1, 1.6, 1],
+                      opacity: [0.6, 0.15, 0.6],
+                    }}
+                    transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
+                  />
+                  {point.id === 'current_average' ? (
+                    <div className="relative w-10 h-10 rounded-full border-2 border-white shadow-xl overflow-hidden bg-white p-0.5 animate-in zoom-in-50 duration-500">
+                      <img
+                        src={avatar}
+                        alt="Current Average"
+                        className="w-full h-full rounded-full object-cover"
+                      />
+                      <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-blue-500 border border-white rounded-full shadow-sm" />
+                    </div>
+                  ) : (
+                    <div
+                      className="relative w-5 h-5 flex items-center justify-center"
+                      style={{ transform: 'rotate(45deg)' }}
+                    >
+                      <div
+                        className="w-4 h-4 rounded-sm shadow-lg border-2 border-white"
+                        style={{ backgroundColor: point.color }}
+                      />
+                    </div>
+                  )}
+                  <div className="absolute top-[calc(100%+2px)] left-1/2 -translate-x-1/2 whitespace-nowrap">
+                    <span
+                      className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md shadow-sm border"
+                      style={{
+                        color: point.color,
+                        backgroundColor: `${point.color}10`,
+                        borderColor: `${point.color}30`,
+                      }}
+                    >
+                      {point.label}
+                    </span>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
 
-            {/* Animated Student Agent Marker - Removed per user request */}
-            {/* 
+            {/* Animated Student Agent Marker */}
             <motion.div
               key={`agent-at-${agent.position.x}-${agent.position.y}`}
               className="absolute pointer-events-none z-40 flex items-center justify-center"
@@ -921,9 +948,8 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
                 rotate: { duration: 0.4 }
               }}
               animate={{
-                left: `${(agent.position.x + 0.5) * (100 / GRID_SIZE)}%`,
-                top: `${(agent.position.y + 0.5) * (100 / GRID_SIZE)}%`,
-                scale: isPlaying ? [1, 1.15, 1] : 1, // Subtle bounce effect during playback
+                ...mapPercent(agent.position),
+                scale: isPlaying ? [1, 1.15, 1] : 1,
                 rotateY: 0 // Force orientation reset to clear potential mirrored state
               }}
               style={{
@@ -935,7 +961,6 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
             >
               <SocialAgent isMoving={isPlaying} />
             </motion.div>
-            */}
 
             {showTravelArrow && (
               <svg className="absolute inset-0 w-full h-full pointer-events-none z-30">
@@ -949,10 +974,10 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
                   </marker>
                 </defs>
                 <line
-                  x1={`${(prevPosition.x + 0.5) * (100 / GRID_SIZE)}%`}
-                  y1={`${(prevPosition.y + 0.5) * (100 / GRID_SIZE)}%`}
-                  x2={`${(agent.position.x + 0.5) * (100 / GRID_SIZE)}%`}
-                  y2={`${(agent.position.y + 0.5) * (100 / GRID_SIZE)}%`}
+                  x1={`${mapPoint(prevPosition).x / MAP_SIZE * 100}%`}
+                  y1={`${mapPoint(prevPosition).y / MAP_SIZE * 100}%`}
+                  x2={`${mapPoint(agent.position).x / MAP_SIZE * 100}%`}
+                  y2={`${mapPoint(agent.position).y / MAP_SIZE * 100}%`}
                   stroke="url(#travelGradient)"
                   strokeWidth="4"
                   strokeDasharray="12 6"

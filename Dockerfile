@@ -50,4 +50,4 @@ ENV PYTHONUNBUFFERED=1
 ENV PORT=7860
 
 # Run the application
-CMD gunicorn -b 0.0.0.0:$PORT backend.nlp_api:app
+CMD gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --threads 4 --workers 1 --timeout 120 --graceful-timeout 30 --keep-alive 5 backend.nlp_api:app

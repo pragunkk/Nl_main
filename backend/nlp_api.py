@@ -31,7 +31,7 @@ except Exception as e:
 # Import backend modules (support both script and package execution)
 try:
     from .init import app
-    from .database import authenticate_user, create_user, get_user_by_token, init_db, get_session, update_session, save_summary, save_polyline, get_polylines as get_db_polylines, get_notes, add_note, get_lectures, reset_db, get_bookmarks, add_bookmark, remove_bookmark, reset_session_data, save_notification
+    from .database import authenticate_user, create_user, get_user_by_token, init_db, get_session, update_session, save_summary, save_polyline, get_polylines as get_db_polylines, get_notes, add_note, get_lectures, reset_db, get_bookmarks as get_db_bookmarks, add_bookmark as add_db_bookmark, remove_bookmark as remove_db_bookmark, reset_session_data, save_notification
     from .request_logger import log_request
     from .utils import utils_preprocess_text, get_cos_sim
     from . import navigator
@@ -39,7 +39,7 @@ try:
     from . import radial_mapper
 except ImportError:
     from init import app
-    from database import authenticate_user, create_user, get_user_by_token, init_db, get_session, update_session, save_summary, save_polyline, get_polylines as get_db_polylines, get_notes, add_note, get_lectures, reset_db, get_bookmarks, add_bookmark, remove_bookmark, reset_session_data, save_notification
+    from database import authenticate_user, create_user, get_user_by_token, init_db, get_session, update_session, save_summary, save_polyline, get_polylines as get_db_polylines, get_notes, add_note, get_lectures, reset_db, get_bookmarks as get_db_bookmarks, add_bookmark as add_db_bookmark, remove_bookmark as remove_db_bookmark, reset_session_data, save_notification
     from request_logger import log_request
     from utils import utils_preprocess_text, get_cos_sim
     import navigator
@@ -337,15 +337,6 @@ def reset_database():
 
 @app.route('/api/resources', methods=['GET'])
 def get_resources():
-    # RELOAD CSV DYNAMICALLY FOR DEV
-    global coords
-    try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        csv_path = os.path.join(base_dir, 'topic_2d_coordinates.csv')
-        coords = _load_csv_coordinates(csv_path)
-    except Exception as e:
-        print("Error reloading csv:", e)
-
     """Get all NLP learning resources with their grid positions and correct visited state"""
     session_id = current_user_id()
     session = get_session(session_id)
@@ -1155,7 +1146,6 @@ def get_learning_data():
 def get_bookmarks():
     """Get all bookmarked resources for a session"""
     session_id = current_user_id()
-    from database import get_bookmarks as get_db_bookmarks
     return jsonify(get_db_bookmarks(session_id))
 
 
@@ -1169,7 +1159,6 @@ def add_bookmark():
     if not resource_id:
         return jsonify({'error': 'Resource ID required'}), 400
         
-    from database import add_bookmark as add_db_bookmark
     add_db_bookmark(session_id, resource_id)
     return jsonify({'status': 'success', 'resource_id': resource_id})
 
@@ -1184,7 +1173,6 @@ def remove_bookmark():
     if not resource_id:
         return jsonify({'error': 'Resource ID required'}), 400
         
-    from database import remove_bookmark as remove_db_bookmark
     remove_db_bookmark(session_id, resource_id)
     return jsonify({'status': 'success', 'resource_id': resource_id})
 

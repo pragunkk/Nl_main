@@ -141,23 +141,6 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
     return { left: `${mapped.x / MAP_SIZE * 100}%`, top: `${mapped.y / MAP_SIZE * 100}%` };
   }, [mapGridPoint]);
 
-  // Auto-scroll to agent on load or movement
-  React.useEffect(() => {
-    if (gridRef.current && agent.position) {
-      const mappedAgent = mapPoint(agent.position);
-      const maxScrollY = gridRef.current.scrollHeight - gridRef.current.clientHeight;
-      const maxScrollX = gridRef.current.scrollWidth - gridRef.current.clientWidth;
-      const scrollY = Math.max(0, Math.min(maxScrollY, (mappedAgent.y * zoomLevel) - (gridRef.current.clientHeight / 2)));
-      const scrollX = Math.max(0, Math.min(maxScrollX, (mappedAgent.x * zoomLevel) - (gridRef.current.clientWidth / 2)));
-
-      gridRef.current.scrollTo({
-        top: scrollY,
-        left: scrollX,
-        behavior: 'smooth'
-      });
-    }
-  }, [agent.position.x, agent.position.y, mapPoint, zoomLevel]);
-
   // Build the assimilation path from polyline assimilation positions
   // This traces how the user's average assimilation evolved over time
   const assimilationPath = React.useMemo(() => {
@@ -166,6 +149,30 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
       .filter(p => p.assimilation_position && p.assimilation_position.x !== undefined)
       .map(p => p.assimilation_position!)
   }, [polylines]);
+
+  const currentPositionPoint = assimilationPath.length > 0 ? assimilationPath[assimilationPath.length - 1] : null;
+
+  // Auto-scroll to agent or path endpoint on load or movement
+  React.useEffect(() => {
+    if (gridRef.current) {
+      const targetPoint = currentPositionPoint
+        ? mapGridPoint(currentPositionPoint)
+        : (agent.position ? mapPoint(agent.position) : null);
+
+      if (targetPoint) {
+        const maxScrollY = gridRef.current.scrollHeight - gridRef.current.clientHeight;
+        const maxScrollX = gridRef.current.scrollWidth - gridRef.current.clientWidth;
+        const scrollY = Math.max(0, Math.min(maxScrollY, (targetPoint.y * zoomLevel) - (gridRef.current.clientHeight / 2)));
+        const scrollX = Math.max(0, Math.min(maxScrollX, (targetPoint.x * zoomLevel) - (gridRef.current.clientWidth / 2)));
+
+        gridRef.current.scrollTo({
+          top: scrollY,
+          left: scrollX,
+          behavior: 'smooth'
+        });
+      }
+    }
+  }, [agent.position.x, agent.position.y, currentPositionPoint, mapPoint, mapGridPoint, zoomLevel]);
 
   // Find the resource the agent is currently sitting on
   const currentResource = React.useMemo(() => {
@@ -561,7 +568,7 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
       }
 
       const showTooltip = hoveredResource === resource.id;
-      const isCurrent = currentResource?.id === resource.id;
+      const isCurrent = !currentPositionPoint && currentResource?.id === resource.id;
 
       return (
         <div
@@ -869,47 +876,39 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
 
             {/* Assimilation Point Markers */}
             <div className="absolute inset-4 z-[35] pointer-events-none">
-              {assimilationPoints.map((point) => (
-                <motion.div
-                  key={`assim-${point.id}`}
-                  className="absolute flex items-center justify-center"
-                  initial={{ opacity: 0, scale: 0 }}
-                  animate={{
-                    opacity: 1,
-                    scale: 1,
-                    ...mapGridPercent(point.position),
-                  }}
-                  transition={{ type: 'spring', damping: 20, stiffness: 100, delay: 0.2 }}
-                  style={{
-                    width: `${100 / GRID_SIZE}%`,
-                    height: `${100 / GRID_SIZE}%`,
-                    x: '-50%',
-                    y: '-50%',
-                  }}
-                >
+              {assimilationPoints
+                .filter(point => point.id !== 'current_average')
+                .map((point) => (
                   <motion.div
-                    className="absolute rounded-full"
-                    style={{
-                      width: '36px',
-                      height: '36px',
-                      background: `radial-gradient(circle, ${point.color}40 0%, transparent 70%)`,
-                    }}
+                    key={`assim-${point.id}`}
+                    className="absolute flex items-center justify-center"
+                    initial={{ opacity: 0, scale: 0 }}
                     animate={{
-                      scale: [1, 1.6, 1],
-                      opacity: [0.6, 0.15, 0.6],
+                      opacity: 1,
+                      scale: 1,
+                      ...mapGridPercent(point.position),
                     }}
-                    transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
-                  />
-                  {point.id === 'current_average' ? (
-                    <div className="relative w-10 h-10 rounded-full border-2 border-white shadow-xl overflow-hidden bg-white p-0.5 animate-in zoom-in-50 duration-500">
-                      <img
-                        src={avatar}
-                        alt="Current Average"
-                        className="w-full h-full rounded-full object-cover"
-                      />
-                      <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-blue-500 border border-white rounded-full shadow-sm" />
-                    </div>
-                  ) : (
+                    transition={{ type: 'spring', damping: 20, stiffness: 100, delay: 0.2 }}
+                    style={{
+                      width: `${100 / GRID_SIZE}%`,
+                      height: `${100 / GRID_SIZE}%`,
+                      x: '-50%',
+                      y: '-50%',
+                    }}
+                  >
+                    <motion.div
+                      className="absolute rounded-full"
+                      style={{
+                        width: '36px',
+                        height: '36px',
+                        background: `radial-gradient(circle, ${point.color}40 0%, transparent 70%)`,
+                      }}
+                      animate={{
+                        scale: [1, 1.6, 1],
+                        opacity: [0.6, 0.15, 0.6],
+                      }}
+                      transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
+                    />
                     <div
                       className="relative w-5 h-5 flex items-center justify-center"
                       style={{ transform: 'rotate(45deg)' }}
@@ -919,50 +918,78 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
                         style={{ backgroundColor: point.color }}
                       />
                     </div>
-                  )}
-                  <div className="absolute top-[calc(100%+2px)] left-1/2 -translate-x-1/2 whitespace-nowrap">
-                    <span
-                      className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md shadow-sm border"
-                      style={{
-                        color: point.color,
-                        backgroundColor: `${point.color}10`,
-                        borderColor: `${point.color}30`,
-                      }}
-                    >
-                      {point.label}
-                    </span>
-                  </div>
-                </motion.div>
-              ))}
+                    <div className="absolute top-[calc(100%+2px)] left-1/2 -translate-x-1/2 whitespace-nowrap">
+                      <span
+                        className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md shadow-sm border"
+                        style={{
+                          color: point.color,
+                          backgroundColor: `${point.color}10`,
+                          borderColor: `${point.color}30`,
+                        }}
+                      >
+                        {point.label}
+                      </span>
+                    </div>
+                  </motion.div>
+                ))}
             </div>
 
             {/* Animated Student Agent Marker */}
-            <motion.div
-              key={`agent-at-${agent.position.x}-${agent.position.y}`}
-              className="absolute pointer-events-none z-40 flex items-center justify-center"
-              initial={false}
-              transition={{
-                left: { type: "spring", damping: 25, stiffness: 120 },
-                top: { type: "spring", damping: 25, stiffness: 120 },
-                scale: { duration: 0.4 },
-                rotate: { duration: 0.4 }
-              }}
-              animate={{
-                ...mapPercent(agent.position),
-                scale: isPlaying ? [1, 1.15, 1] : 1,
-                rotateY: 0 // Force orientation reset to clear potential mirrored state
-              }}
-              style={{
-                width: `${100 / GRID_SIZE}%`,
-                height: `${100 / GRID_SIZE}%`,
-                x: '-50%',
-                y: '-50%',
-              }}
-            >
-              <SocialAgent isMoving={isPlaying} />
-            </motion.div>
+            {currentPositionPoint ? (
+              <div className="absolute inset-4 z-40 pointer-events-none">
+                <motion.div
+                  key={`agent-at-path-${currentPositionPoint.x}-${currentPositionPoint.y}`}
+                  className="absolute pointer-events-none flex items-center justify-center"
+                  initial={false}
+                  transition={{
+                    left: { type: "spring", damping: 25, stiffness: 120 },
+                    top: { type: "spring", damping: 25, stiffness: 120 },
+                    scale: { duration: 0.4 },
+                    rotate: { duration: 0.4 }
+                  }}
+                  animate={{
+                    ...mapGridPercent(currentPositionPoint),
+                    scale: isPlaying ? [1, 1.15, 1] : 1,
+                    rotateY: 0
+                  }}
+                  style={{
+                    width: `${100 / GRID_SIZE}%`,
+                    height: `${100 / GRID_SIZE}%`,
+                    x: '-50%',
+                    y: '-50%',
+                  }}
+                >
+                  <SocialAgent isMoving={isPlaying} />
+                </motion.div>
+              </div>
+            ) : (
+              <motion.div
+                key={`agent-at-${agent.position.x}-${agent.position.y}`}
+                className="absolute pointer-events-none z-40 flex items-center justify-center"
+                initial={false}
+                transition={{
+                  left: { type: "spring", damping: 25, stiffness: 120 },
+                  top: { type: "spring", damping: 25, stiffness: 120 },
+                  scale: { duration: 0.4 },
+                  rotate: { duration: 0.4 }
+                }}
+                animate={{
+                  ...mapPercent(agent.position),
+                  scale: isPlaying ? [1, 1.15, 1] : 1,
+                  rotateY: 0
+                }}
+                style={{
+                  width: `${100 / GRID_SIZE}%`,
+                  height: `${100 / GRID_SIZE}%`,
+                  x: '-50%',
+                  y: '-50%',
+                }}
+              >
+                <SocialAgent isMoving={isPlaying} />
+              </motion.div>
+            )}
 
-            {showTravelArrow && (
+            {showTravelArrow && !currentPositionPoint && (
               <svg className="absolute inset-0 w-full h-full pointer-events-none z-30">
                 <defs>
                   <linearGradient id="travelGradient" x1="0%" y1="0%" x2="100%" y2="100%">

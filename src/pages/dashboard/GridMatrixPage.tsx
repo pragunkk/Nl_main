@@ -54,13 +54,9 @@ const GridMatrixPage: React.FC = () => {
     const points = [];
     
     const highLine = polylines.find(p => p.id === 'high_line');
-    const currentAvg = polylines.find(p => p.id === 'current_average');
 
     if (highLine && highLine.assimilation_position) {
       points.push({ id: highLine.id, position: highLine.assimilation_position, label: 'Peak Potential', color: '#ef4444' });
-    }
-    if (currentAvg && currentAvg.assimilation_position) {
-      points.push({ id: currentAvg.id, position: currentAvg.assimilation_position, label: 'You (Avg)', color: '#06b6d4' });
     }
     
     return points;

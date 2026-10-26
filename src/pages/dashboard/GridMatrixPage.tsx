@@ -208,9 +208,18 @@ const GridMatrixPage: React.FC = () => {
       // Update polylines with both the new summary and the updated average
       setPolylines(prev => {
         const base = prev.filter(p => !['learning-path-1', 'dqn-simulation', 'current_average'].includes(p.id));
-        const updates = [result.polyline];
+        const updates: Polyline[] = [];
+        if (result.polyline) {
+          updates.push({
+            ...result.polyline,
+            path: Array.isArray(result.polyline.path) ? result.polyline.path : []
+          });
+        }
         if (result.average_polyline) {
-          updates.push(result.average_polyline);
+          updates.push({
+            ...result.average_polyline,
+            path: Array.isArray(result.average_polyline.path) ? result.average_polyline.path : []
+          });
         }
         return [...base, ...updates];
       });

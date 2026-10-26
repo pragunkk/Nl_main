@@ -703,26 +703,11 @@ def create_learning_summary():
     save_polyline(polyline_id, new_polyline, session_id)
     
     # Calculate updated average polyline
-    all_polylines = get_db_polylines(session_id)
-    history_scores = [p.get('module_scores', []) for p in all_polylines.values() if p.get('module_scores')]
-    num_histories = len(history_scores)
-    avg_scores = [0.0] * 19
-    if num_histories > 0:
-        for scores in history_scores:
-            for i, s in enumerate(scores):
-                if i < 19: avg_scores[i] += s
-        avg_scores = [s / num_histories for s in avg_scores]
+    _, cur_polyline = compute_virtual_polylines(session_id)
 
     return jsonify({
         'polyline': new_polyline,
-        'average_polyline': {
-            'id': 'current_average',
-            'name': 'Current Average Knowledge',
-            'module_scores': avg_scores,
-            'isActive': True,
-            'color': 'rgba(59, 130, 246, 0.8)',
-            'assimilation_position': radial_mapper.polyline_to_grid(avg_scores, num_topics=len(ordered_modules))
-        },
+        'average_polyline': cur_polyline,
         'next_recommendation': new_polyline['next_recommendation'],
         'keywords_found': keywords_found,
         'totalReward': session['totalReward'],
@@ -734,12 +719,10 @@ def create_learning_summary():
 # POLYLINE ENDPOINTS
 # =============================================
 
-@app.route('/api/polylines', methods=['GET'])
-def get_polylines_route():
-    """Get all polylines including dynamically generated High Line and Current Average polylines"""
-    session_id = current_user_id()
-    polylines = get_db_polylines(session_id)
-    
+def compute_virtual_polylines(session_id, polylines=None):
+    if polylines is None:
+        polylines = get_db_polylines(session_id)
+        
     # Generate ordered_modules to ensure consistent mapping
     seen_modules = set()
     ordered_modules = []
@@ -845,9 +828,15 @@ def get_polylines_route():
         'assimilation_position': cur_assimilation
     }
 
-    # Format result: Return ONLY the virtual polylines, or include histories?
-    # User said "everywhere it should be shown like a high polyline... and current should be average of all histories"
-    # We will return the historical ones but set them to inactive, and these two to strictly active.
+    return hl_polyline, cur_polyline
+
+
+@app.route('/api/polylines', methods=['GET'])
+def get_polylines_route():
+    """Get all polylines including dynamically generated High Line and Current Average polylines"""
+    session_id = current_user_id()
+    polylines = get_db_polylines(session_id)
+    hl_polyline, cur_polyline = compute_virtual_polylines(session_id, polylines)
     
     # Format result: Return ONLY the virtual polylines as active
     result = []

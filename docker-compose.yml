@@ -28,6 +28,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
       - ./backend/data:/app/backend/data
+      - ./dist:/home/user/app/dist
     depends_on:
       postgres:
         condition: service_healthy

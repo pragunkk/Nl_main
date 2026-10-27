@@ -24,6 +24,7 @@ interface GridVisualizationProps {
   playbackPath?: GridPosition[];
   onPlaybackComplete?: () => void;
   assimilationPoints?: AssimilationPoint[];
+  nextRecommendation?: Polyline['next_recommendation'];
 }
 
 const GRID_SIZE = 20;
@@ -88,7 +89,8 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
   isPlaying = false,
   playbackPath = [],
   onPlaybackComplete,
-  assimilationPoints = []
+  assimilationPoints = [],
+  nextRecommendation = null
 }) => {
   const [selectedResource, setSelectedResource] = useState<Resource | null>(null);
   const [hoveredResource, setHoveredResource] = useState<string | null>(null);
@@ -569,11 +571,12 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
 
       const showTooltip = hoveredResource === resource.id;
       const isCurrent = !currentPositionPoint && currentResource?.id === resource.id;
+      const isRecommended = Boolean(nextRecommendation && (nextRecommendation.id === resource.id || nextRecommendation.title === resource.title));
 
       return (
         <div
           key={`res-${resource.id}`}
-          className={`absolute transition-all duration-500 ${showTooltip ? 'z-[100]' : 'z-30'}`}
+          className={`absolute transition-all duration-500 ${showTooltip ? 'z-[100]' : (isRecommended ? 'z-40' : 'z-30')}`}
           style={{
             ...mapPercent(resource.position),
             width: `${100 / GRID_SIZE}%`,
@@ -587,10 +590,15 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
             onMouseLeave={handleMouseLeave}
           >
             {/* Circular Reference Marker */}
-            <div className={`
-              relative flex items-center justify-center
+            <div
+              onClick={() => {
+                setSelectedResource(resource);
+                onResourceClick(resource, true);
+              }}
+              className={`
+              relative flex items-center justify-center cursor-pointer
               w-10 h-10 transform transition-all duration-300
-              ${isCurrent ? 'scale-150 z-50 animate-pulse' : (selectedResource?.id === resource.id ? 'scale-110' : 'hover:scale-110 hover:-translate-y-1')}
+              ${isCurrent || isRecommended ? 'scale-150 z-50 animate-pulse' : (selectedResource?.id === resource.id ? 'scale-110' : 'hover:scale-110 hover:-translate-y-1')}
             `}>
               {/* Outer Glow */}
               <div className={`absolute inset-0 rounded-full blur-[8px] opacity-25 ${resource.visited ? 'bg-green-400' :
@@ -611,13 +619,13 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
                 <ResourceIcon type={resource.type} />
               </div>
 
-              {/* Highlight - pulsing golden ring */}
-              {isCurrent && (
+              {/* Highlight - pulsing golden/indigo ring */}
+              {(isCurrent || isRecommended) && (
                 <>
-                  <div className="absolute inset-0 rounded-full border-2 border-amber-400 animate-ping opacity-40" style={{ animationDuration: '2s' }} />
-                  <div className="absolute inset-[-3px] rounded-full border-2 border-amber-400 opacity-80" />
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-amber-500 text-white text-[6px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-full shadow-md whitespace-nowrap leading-none">
-                    CURRENT
+                  <div className={`absolute inset-0 rounded-full border-2 ${isRecommended ? 'border-indigo-500' : 'border-amber-400'} animate-ping opacity-40`} style={{ animationDuration: '2s' }} />
+                  <div className={`absolute inset-[-3px] rounded-full border-2 ${isRecommended ? 'border-indigo-500' : 'border-amber-400'} opacity-80`} />
+                  <div className={`absolute -top-3 left-1/2 -translate-x-1/2 ${isRecommended ? 'bg-indigo-600' : 'bg-amber-500'} text-white text-[6px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-full shadow-md whitespace-nowrap leading-none`}>
+                    {isRecommended ? 'NEXT LESSON' : 'CURRENT'}
                   </div>
                 </>
               )}
@@ -652,6 +660,8 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
+                        setSelectedResource(resource);
+                        onResourceClick(resource, true);
                         if (resource.youtube_url) {
                           setVideoResource(resource);
                           setHoveredResource(null);
@@ -771,17 +781,36 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
         </div>
       </div>
 
-      {isSimulationRunning && dqnPathInfo?.resource && (
+      {((isSimulationRunning && dqnPathInfo?.resource) || nextRecommendation) && (
         <div className="absolute top-20 right-6 z-20 animate-in slide-in-from-top-4 fade-in duration-300 pointer-events-none">
-          <div className="bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-lg border border-red-100 ring-1 ring-red-50 w-64 pointer-events-auto">
+          <div
+            onClick={() => {
+              const recId = isSimulationRunning && dqnPathInfo?.resource ? dqnPathInfo.resource.id : nextRecommendation?.id;
+              const target = resources.find(r => r.id === recId || r.title === nextRecommendation?.title);
+              if (target) {
+                setSelectedResource(target);
+                onResourceClick(target, true);
+              }
+            }}
+            className="bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-lg border border-indigo-200 ring-1 ring-indigo-50 w-72 pointer-events-auto cursor-pointer hover:shadow-xl transition-all"
+          >
             <div className="flex items-start justify-between gap-3">
-              <div>
-                <span className="text-[10px] font-bold tracking-wider text-red-500 uppercase">Recommendation</span>
-                <h3 className="text-sm font-semibold text-gray-900 mt-0.5 line-clamp-1">{dqnPathInfo.resource.title}</h3>
+              <div className="min-w-0">
+                <span className="text-[10px] font-black tracking-wider text-indigo-600 uppercase block">
+                  {isSimulationRunning && dqnPathInfo?.resource ? 'DQN Recommendation' : 'Next Recommended Lesson'}
+                </span>
+                <h3 className="text-sm font-bold text-gray-900 mt-0.5 line-clamp-2">
+                  {isSimulationRunning && dqnPathInfo?.resource ? dqnPathInfo.resource.title : nextRecommendation?.title}
+                </h3>
+                {!isSimulationRunning && nextRecommendation?.module && (
+                  <p className="text-[10px] text-gray-500 font-medium truncate mt-0.5">{nextRecommendation.module}</p>
+                )}
               </div>
-              <div className="flex flex-col items-end">
-                <span className="text-lg font-bold text-red-600 leading-none">+{dqnPathInfo.reward}</span>
-              </div>
+              {isSimulationRunning && dqnPathInfo?.resource && (
+                <div className="flex flex-col items-end shrink-0">
+                  <span className="text-lg font-bold text-red-600 leading-none">+{dqnPathInfo.reward}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

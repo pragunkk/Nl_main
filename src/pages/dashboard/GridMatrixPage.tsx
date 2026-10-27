@@ -5,7 +5,7 @@ import { useDQNSimulation } from '../../hooks/useDQNSimulation';
 import { Resource, Polyline, LearningSummary, GridPosition } from '../../types';
 import { nlpApi } from '../../services/nlpApi';
 import { useAppContext } from '../../context/AppContext';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Sparkles, X, PlayCircle, MapPin } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import DashboardTutorial from '../../components/Dashboard/DashboardTutorial';
 
@@ -39,6 +39,8 @@ const GridMatrixPage: React.FC = () => {
   const [polylines, setPolylines] = useState<Polyline[]>([]);
   const [learningPath, setLearningPath] = useState<GridPosition[]>([]);
   const [dqnPathInfo, setDqnPathInfo] = useState<{ resource: Resource | null, reward: number } | null>(null);
+  const [nextRecommendation, setNextRecommendation] = useState<NonNullable<Polyline['next_recommendation']> | null>(null);
+  const [showRecommendationAlert, setShowRecommendationAlert] = useState(false);
   const [learningData, setLearningData] = useState<LearningSummary>({
     totalResources: 0,
     visitedResources: 0,
@@ -94,8 +96,22 @@ const GridMatrixPage: React.FC = () => {
 
         setResources(resourceData);
         setPolylines(polylineData);
+
+        const historyWithRec = polylineData.filter(
+          p => !['high_line', 'current_average', 'dqn-simulation', 'learning-path-1'].includes(p.id) && p.next_recommendation
+        );
+        const latestRec = historyWithRec.length > 0
+          ? historyWithRec[historyWithRec.length - 1].next_recommendation || null
+          : null;
+        if (latestRec) {
+          setNextRecommendation(latestRec);
+        }
+
         setLearningData({
           ...learningStats,
+          recommendations: latestRec?.title
+            ? [latestRec.title, ...(learningStats.recommendations || []).filter(r => r !== latestRec.title)].slice(0, 3)
+            : (learningStats.recommendations || []),
           totalResources: resourceData.length
         });
 
@@ -163,37 +179,71 @@ const GridMatrixPage: React.FC = () => {
   const handleSummarizeLearning = useCallback(async (title: string, summary: string) => {
     setIsLoading(true);
     try {
-      const visitedIds = resources.filter(r => r.visited).map(r => r.id);
+      // Ensure if the user summarized a lesson matching by title or module, it is counted as visited
+      const matchedResource = resources.find(
+        r =>
+          r.title.toLowerCase() === title.trim().toLowerCase() ||
+          r.module.toLowerCase() === title.trim().toLowerCase()
+      );
+      if (matchedResource && !matchedResource.visited) {
+        setResources(prev =>
+          prev.map(r => (r.id === matchedResource.id ? { ...r, visited: true } : r))
+        );
+        visitResource(matchedResource.id, matchedResource.reward);
+        await globalVisitResource(matchedResource.id);
+      }
+
+      const visitedIds = Array.from(
+        new Set([
+          ...resources.filter(r => r.visited).map(r => r.id),
+          ...(matchedResource ? [matchedResource.id] : [])
+        ])
+      );
       const result = await nlpApi.createLearningSummary('default', title, summary, visitedIds);
 
-      // Move agent to DQN-recommended resource or fallback to nearest unvisited
+      // Determine recommended next lesson from DQN navigator or fallback to next unvisited
+      const unvisited = resources.filter(r => !visitedIds.includes(r.id));
+      const rec = result.next_recommendation || (unvisited.length > 0 ? {
+        id: unvisited[0].id,
+        title: unvisited[0].title,
+        position: unvisited[0].position,
+        module: unvisited[0].module,
+        reason: 'fallback'
+      } : null);
 
-      const nextRecPos = result.next_recommendation?.position;
+      setNextRecommendation(rec);
+      if (rec) {
+        setShowRecommendationAlert(true);
+      }
+
+      // Move agent to DQN-recommended resource or fallback to nearest unvisited
+      const nextRecPos = rec?.position;
       if (nextRecPos) {
         moveAgent(nextRecPos);
         await updateAgentPosition(nextRecPos);
-      } else {
-        const unvisited = resources.filter(r => !r.visited);
-        if (unvisited.length > 0) {
-          moveAgent(unvisited[0].position);
-          await updateAgentPosition(unvisited[0].position);
-        }
       }
 
-      const visitedResources = resources.filter(r => r.visited);
+      const visitedResources = resources.filter(r => visitedIds.includes(r.id));
       const stats = await generateLearningSummary(visitedResources);
 
       // Surface next recommendation and update activity log in a single state update
-      const nextRecTitle = result.next_recommendation?.title;
+      const nextRecTitle = rec?.title;
       setLearningData(prev => ({
         ...stats,
+        visitedResources: visitedIds.length,
         recommendations: nextRecTitle
           ? [nextRecTitle, ...stats.recommendations.filter(r => r !== nextRecTitle)].slice(0, 3)
           : stats.recommendations,
         activityLog: [
+          ...(rec ? [{
+            id: `log-rec-${Date.now()}`,
+            type: 'optimal' as const,
+            title: `Next Recommended: ${rec.title}`,
+            timestamp: new Date().toLocaleTimeString()
+          }] : []),
           {
             id: `log-${Date.now()}`,
-            type: 'summary',
+            type: 'summary' as const,
             title: `Completed Summary: ${title}`,
             timestamp: new Date().toLocaleTimeString()
           },
@@ -225,7 +275,7 @@ const GridMatrixPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [resources, generateLearningSummary, moveAgent, updateAgentPosition, setIsLoading]);
+  }, [resources, generateLearningSummary, moveAgent, updateAgentPosition, setIsLoading, visitResource, globalVisitResource]);
 
   const handleShowPolyline = useCallback((polylineId: string) => {
     setPolylines(prev => prev.map(p => ({
@@ -331,6 +381,8 @@ const GridMatrixPage: React.FC = () => {
       
       // Update local state based on reset
       setAgent(response.session);
+      setNextRecommendation(null);
+      setShowRecommendationAlert(false);
       
       // Re-fetch everything to ensure synchronization
       const [resourceData, polylineData, learningStats] = await Promise.all([
@@ -357,6 +409,83 @@ const GridMatrixPage: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col bg-gray-50 font-sans text-gray-900 relative">
       {showTutorial && <DashboardTutorial onComplete={() => setShowTutorial(false)} page="navigator" />}
+
+      {/* Prominent Alert for Next Recommended Lesson after Summarizing */}
+      {showRecommendationAlert && nextRecommendation && (
+        <div
+          role="alert"
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/45 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+        >
+          <div className="bg-white rounded-2xl shadow-2xl border border-indigo-100 max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 px-6 py-4 flex items-center justify-between text-white">
+              <div className="flex items-center gap-2.5">
+                <div className="p-1.5 bg-white/20 rounded-lg">
+                  <Sparkles className="w-5 h-5 text-amber-300 fill-amber-300" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-indigo-100 block">
+                    Summary Analysed • {nextRecommendation.reason === 'dqn' ? 'RL / DQN Navigator' : 'Navigator Recommendation'}
+                  </span>
+                  <h3 className="text-base font-extrabold tracking-tight">Next Recommended Lesson</h3>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowRecommendationAlert(false)}
+                className="p-1 rounded-full hover:bg-white/20 text-white/80 hover:text-white transition-colors"
+                title="Close Alert"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="p-4 rounded-xl bg-indigo-50/70 border border-indigo-100">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-500 block mb-1">
+                  Recommended Lecture to Watch Next
+                </span>
+                <h4 className="text-lg font-black text-slate-900 leading-snug">
+                  {nextRecommendation.title}
+                </h4>
+                {nextRecommendation.module && (
+                  <p className="text-xs font-semibold text-slate-600 mt-1">
+                    Module: <span className="text-indigo-700">{nextRecommendation.module}</span>
+                  </p>
+                )}
+                {nextRecommendation.position && (
+                  <div className="mt-3 inline-flex items-center gap-1.5 text-xs font-mono font-bold text-indigo-700 bg-white px-2.5 py-1 rounded-lg border border-indigo-100 shadow-sm">
+                    <MapPin className="w-3.5 h-3.5 text-indigo-500" />
+                    Matrix Coordinates: ({Math.round(nextRecommendation.position.x)}, {Math.round(nextRecommendation.position.y)})
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-1">
+                <button
+                  onClick={() => setShowRecommendationAlert(false)}
+                  className="px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors"
+                >
+                  Dismiss
+                </button>
+                <button
+                  onClick={() => {
+                    const target = resources.find(
+                      r => r.id === nextRecommendation.id || r.title === nextRecommendation.title
+                    );
+                    if (target) {
+                      handleResourceClick(target, true);
+                    }
+                    setShowRecommendationAlert(false);
+                  }}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold uppercase tracking-wider rounded-xl shadow-md shadow-indigo-500/20 flex items-center gap-2 transition-all active:scale-95"
+                >
+                  <PlayCircle className="w-4 h-4" />
+                  View on Matrix
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Precision Floating Back Button */}
       <div className="fixed top-6 left-6 z-[60]">
@@ -388,6 +517,7 @@ const GridMatrixPage: React.FC = () => {
               playbackPath={playbackPath}
               onPlaybackComplete={() => setIsPlaying(false)}
               assimilationPoints={assimilationPoints}
+              nextRecommendation={nextRecommendation}
             />
           </div>
 
@@ -410,6 +540,7 @@ const GridMatrixPage: React.FC = () => {
               onStartTutorial={() => setShowTutorial(true)}
               agent={agent}
               onRestartJourney={handleRestartJourney}
+              nextRecommendation={nextRecommendation}
             />
           </div>
         </div>

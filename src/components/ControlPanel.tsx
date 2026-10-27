@@ -12,7 +12,7 @@ interface ControlPanelProps {
   polylines: Polyline[];
   isSimulationRunning: boolean;
   isLoading: boolean;
-  learningPath: string[];
+  learningPath: any[];
   bookmarks: string[];
   toggleBookmark: (id: string) => void;
   resources: Resource[];
@@ -20,6 +20,7 @@ interface ControlPanelProps {
   onStartTutorial: () => void;
   agent: any;
   onRestartJourney: () => Promise<any>;
+  nextRecommendation?: Polyline['next_recommendation'];
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -38,7 +39,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onResourceClick,
   onStartTutorial,
   agent,
-  onRestartJourney
+  onRestartJourney,
+  nextRecommendation
 }) => {
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [showPolylineModal, setShowPolylineModal] = useState(false);
@@ -352,9 +354,50 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         </div>
 
         {/* Learning Stats / Insights */}
-        {(learningData.strengths.length > 0 || learningData.recommendations.length > 0 || learningData.ai_analysis) && (
+        {(nextRecommendation || learningData.strengths.length > 0 || learningData.recommendations.length > 0 || learningData.ai_analysis) && (
           <div className="px-6 py-4 bg-white border-b border-gray-100">
             <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Insights</h3>
+
+            {nextRecommendation && (
+              <div className="mb-4 p-3.5 bg-gradient-to-br from-amber-50 via-indigo-50/60 to-blue-50 border border-indigo-200 rounded-xl shadow-sm">
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <div className="flex items-center gap-1.5 text-indigo-700">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-500 fill-amber-400" />
+                    <span className="text-[10px] font-black uppercase tracking-wider">Next Recommended Lesson</span>
+                  </div>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+                    nextRecommendation.reason === 'dqn'
+                      ? 'bg-indigo-100 text-indigo-700'
+                      : 'bg-amber-100 text-amber-700'
+                  }`}>
+                    {nextRecommendation.reason === 'dqn' ? '🧠 RL / DQN' : '⚡ Next Step'}
+                  </span>
+                </div>
+                <p className="text-sm font-bold text-slate-900 leading-snug mb-1">
+                  {nextRecommendation.title}
+                </p>
+                <div className="flex items-center justify-between text-[10px] text-slate-500 font-semibold mb-2.5">
+                  <span className="truncate">{nextRecommendation.module}</span>
+                  {nextRecommendation.position && (
+                    <span className="font-mono bg-white/80 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-100 shrink-0 ml-2">
+                      📍 ({Math.round(nextRecommendation.position.x)}, {Math.round(nextRecommendation.position.y)})
+                    </span>
+                  )}
+                </div>
+                {(() => {
+                  const recResource = resources.find(r => r.id === nextRecommendation.id || r.title === nextRecommendation.title);
+                  return recResource ? (
+                    <button
+                      onClick={() => onResourceClick(recResource)}
+                      className="w-full py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 shadow-sm"
+                    >
+                      <PlayCircle className="w-3.5 h-3.5" />
+                      Open Recommended Lesson
+                    </button>
+                  ) : null;
+                })()}
+              </div>
+            )}
 
             {learningData.ai_analysis && (
               <div className="mb-4 p-3 bg-indigo-50/50 border border-indigo-100 rounded-xl">
@@ -376,6 +419,19 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     {learningData.strengths.slice(0, 2).map((strength, i) => (
                       <span key={i} className="px-1.5 py-0.5 bg-green-50 text-green-700 text-[9px] font-bold rounded border border-green-100">
                         {strength}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {learningData.recommendations.length > 0 && (
+                <div className="flex-1 min-w-[120px]">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">Recommended Queue</span>
+                  <div className="flex flex-wrap gap-1">
+                    {learningData.recommendations.slice(0, 3).map((rec, i) => (
+                      <span key={i} className="px-1.5 py-0.5 bg-amber-50 text-amber-700 text-[9px] font-bold rounded border border-amber-200">
+                        {rec}
                       </span>
                     ))}
                   </div>

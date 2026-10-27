@@ -488,22 +488,22 @@ const GridMatrixPage: React.FC = () => {
       )}
       
       {/* Precision Floating Back Button */}
-      <div className="fixed top-6 left-6 z-[60]">
+      <div className="fixed top-4 left-6 z-[60]">
         <Link 
           to="/dashboard"
-          className="flex items-center gap-3 px-5 py-3 bg-white/80 backdrop-blur-md hover:bg-white text-slate-600 rounded-2xl transition-all shadow-xl shadow-slate-200/50 border border-slate-200 group active:scale-95"
+          className="flex items-center gap-2.5 px-4 py-2.5 bg-white/90 backdrop-blur-md hover:bg-white text-slate-700 rounded-xl transition-all shadow-md shadow-slate-200/60 border border-slate-200/80 group active:scale-95"
           title="Return to Command Center"
         >
-          <ChevronLeft size={18} className="group-hover:-translate-x-1 transition-transform" />
-          <span className="text-[11px] font-black uppercase tracking-[0.2em]">Exit Matrix</span>
+          <ChevronLeft size={16} className="group-hover:-translate-x-0.5 transition-transform text-slate-500" />
+          <span className="text-[11px] font-extrabold uppercase tracking-[0.15em]">Exit Matrix</span>
         </Link>
       </div>
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-[1700px] mx-auto w-full px-6 pt-20 pb-6">
-        <div className="flex flex-col lg:flex-row gap-8 h-[calc(100vh-5rem)] min-h-[600px]">
+      <main className="flex-1 max-w-[1720px] mx-auto w-full px-5 pt-16 pb-5">
+        <div className="flex flex-col lg:flex-row gap-6 h-[calc(100vh-5.25rem)] min-h-[620px]">
           {/* Left Panel - Grid Visualization */}
-          <div id="matrix-grid" className="flex-1 overflow-hidden flex flex-col rounded-2xl bg-white shadow-xl border border-gray-200">
+          <div id="matrix-grid" className="relative flex-1 overflow-hidden flex flex-col rounded-2xl bg-white shadow-lg shadow-slate-200/60 border border-slate-200/80">
             <GridVisualization
               resources={resources}
               agent={agent}
@@ -522,7 +522,7 @@ const GridMatrixPage: React.FC = () => {
           </div>
 
           {/* Right Panel - Control Center */}
-          <div id="control-center" className="w-full lg:w-96 flex-shrink-0 flex flex-col rounded-2xl bg-white shadow-xl border border-gray-200 overflow-hidden">
+          <div id="control-center" className="w-full lg:w-[390px] flex-shrink-0 flex flex-col rounded-2xl bg-white shadow-lg shadow-slate-200/60 border border-slate-200/80 overflow-hidden">
             <ControlPanel
               onSummarizeLearning={handleSummarizeLearning}
               onShowPolyline={handleShowPolyline}

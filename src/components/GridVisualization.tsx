@@ -100,7 +100,59 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [zoomLevel, setZoomLevel] = useState(1);
   const [showAssimilationPath, setShowAssimilationPath] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = React.useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number } | null>(null);
   const gridRef = React.useRef<HTMLDivElement>(null);
+
+  // Center-preserving zoom helper so zooming never jumps or locks scroll bounds
+  const handleZoomChange = React.useCallback((updater: (prev: number) => number) => {
+    const container = gridRef.current;
+    const centerRatioX = container && container.scrollWidth > 0
+      ? (container.scrollLeft + container.clientWidth / 2) / container.scrollWidth
+      : 0.5;
+    const centerRatioY = container && container.scrollHeight > 0
+      ? (container.scrollTop + container.clientHeight / 2) / container.scrollHeight
+      : 0.5;
+
+    setZoomLevel(prev => {
+      const next = Math.round(Math.min(2.5, Math.max(0.6, updater(prev))) * 100) / 100;
+      requestAnimationFrame(() => {
+        if (gridRef.current) {
+          const newScrollLeft = Math.max(0, centerRatioX * gridRef.current.scrollWidth - gridRef.current.clientWidth / 2);
+          const newScrollTop = Math.max(0, centerRatioY * gridRef.current.scrollHeight - gridRef.current.clientHeight / 2);
+          gridRef.current.scrollLeft = newScrollLeft;
+          gridRef.current.scrollTop = newScrollTop;
+        }
+      });
+      return next;
+    });
+  }, []);
+
+  const handlePanStart = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !gridRef.current) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('[data-node-pin]')) return;
+    setIsPanning(true);
+    panStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      scrollLeft: gridRef.current.scrollLeft,
+      scrollTop: gridRef.current.scrollTop
+    };
+  };
+
+  const handlePanMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isPanning || !panStartRef.current || !gridRef.current) return;
+    const dx = e.clientX - panStartRef.current.x;
+    const dy = e.clientY - panStartRef.current.y;
+    gridRef.current.scrollLeft = panStartRef.current.scrollLeft - dx;
+    gridRef.current.scrollTop = panStartRef.current.scrollTop - dy;
+  };
+
+  const handlePanEnd = () => {
+    setIsPanning(false);
+    panStartRef.current = null;
+  };
 
   const coordinateBounds = React.useMemo(() => {
     const points = resources.length > 0
@@ -154,27 +206,31 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
 
   const currentPositionPoint = assimilationPath.length > 0 ? assimilationPath[assimilationPath.length - 1] : null;
 
-  // Auto-scroll to agent or path endpoint on load or movement
-  React.useEffect(() => {
-    if (gridRef.current) {
-      const targetPoint = currentPositionPoint
-        ? mapGridPoint(currentPositionPoint)
-        : (agent.position ? mapPoint(agent.position) : null);
+  const centerOnAgent = React.useCallback((smooth = true) => {
+    if (!gridRef.current) return;
+    const targetPoint = currentPositionPoint
+      ? mapGridPoint(currentPositionPoint)
+      : (agent.position ? mapPoint(agent.position) : null);
 
-      if (targetPoint) {
-        const maxScrollY = gridRef.current.scrollHeight - gridRef.current.clientHeight;
-        const maxScrollX = gridRef.current.scrollWidth - gridRef.current.clientWidth;
-        const scrollY = Math.max(0, Math.min(maxScrollY, (targetPoint.y * zoomLevel) - (gridRef.current.clientHeight / 2)));
-        const scrollX = Math.max(0, Math.min(maxScrollX, (targetPoint.x * zoomLevel) - (gridRef.current.clientWidth / 2)));
+    if (targetPoint) {
+      const paddingOffset = 36;
+      const maxScrollY = Math.max(0, gridRef.current.scrollHeight - gridRef.current.clientHeight);
+      const maxScrollX = Math.max(0, gridRef.current.scrollWidth - gridRef.current.clientWidth);
+      const scrollY = Math.max(0, Math.min(maxScrollY, (targetPoint.y * zoomLevel) + paddingOffset - (gridRef.current.clientHeight / 2)));
+      const scrollX = Math.max(0, Math.min(maxScrollX, (targetPoint.x * zoomLevel) + paddingOffset - (gridRef.current.clientWidth / 2)));
 
-        gridRef.current.scrollTo({
-          top: scrollY,
-          left: scrollX,
-          behavior: 'smooth'
-        });
-      }
+      gridRef.current.scrollTo({
+        top: scrollY,
+        left: scrollX,
+        behavior: smooth ? 'smooth' : 'auto'
+      });
     }
-  }, [agent.position.x, agent.position.y, currentPositionPoint, mapPoint, mapGridPoint, zoomLevel]);
+  }, [agent.position, currentPositionPoint, mapPoint, mapGridPoint, zoomLevel]);
+
+  // Auto-scroll to agent or path endpoint on load or agent movement (not on manual zoom)
+  React.useEffect(() => {
+    centerOnAgent(true);
+  }, [agent.position.x, agent.position.y, currentPositionPoint?.x, currentPositionPoint?.y]);
 
   // Find the resource the agent is currently sitting on
   const currentResource = React.useMemo(() => {
@@ -544,28 +600,33 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
 
     // 2. Render actual resource nodes as absolute-positioned overlays
     const resourceNodes = resources.map(resource => {
-      // Dynamic Tooltip Positioning
-      let tooltipClass = "absolute bottom-full left-1/2 -translate-x-1/2 mb-2";
-      let arrowClass = "absolute left-1/2 -translate-x-1/2 -bottom-2";
+      // Dynamic Tooltip Positioning using mapped pixel coordinates so edge tooltips never clip
+      const mappedPos = mapPoint(resource.position);
+      let tooltipClass = "absolute bottom-full left-1/2 -translate-x-1/2 mb-2.5";
+      let arrowClass = "absolute left-1/2 -translate-x-1/2 -bottom-1.5";
 
-      if (resource.position.x < 4) {
-        tooltipClass = "absolute bottom-full left-0 mb-2";
-        arrowClass = "absolute left-4 -bottom-2";
-      } else if (resource.position.x > 15) {
-        tooltipClass = "absolute bottom-full right-0 mb-2";
-        arrowClass = "absolute right-4 -bottom-2";
-      }
+      const isLeftEdge = mappedPos.x < 240;
+      const isRightEdge = mappedPos.x > 760;
+      const isTopEdge = mappedPos.y < 260;
 
-      if (resource.position.y < 4) {
-        if (resource.position.x < 4) {
-          tooltipClass = "absolute top-full left-0 mt-2";
-          arrowClass = "absolute left-4 -top-2";
-        } else if (resource.position.x > 15) {
-          tooltipClass = "absolute top-full right-0 mt-2";
-          arrowClass = "absolute right-4 -top-2";
+      if (isTopEdge) {
+        if (isLeftEdge) {
+          tooltipClass = "absolute top-full left-0 mt-2.5";
+          arrowClass = "absolute left-4 -top-1.5";
+        } else if (isRightEdge) {
+          tooltipClass = "absolute top-full right-0 mt-2.5";
+          arrowClass = "absolute right-4 -top-1.5";
         } else {
-          tooltipClass = "absolute top-full left-1/2 -translate-x-1/2 mt-2";
-          arrowClass = "absolute left-1/2 -translate-x-1/2 -top-2";
+          tooltipClass = "absolute top-full left-1/2 -translate-x-1/2 mt-2.5";
+          arrowClass = "absolute left-1/2 -translate-x-1/2 -top-1.5";
+        }
+      } else {
+        if (isLeftEdge) {
+          tooltipClass = "absolute bottom-full left-0 mb-2.5";
+          arrowClass = "absolute left-4 -bottom-1.5";
+        } else if (isRightEdge) {
+          tooltipClass = "absolute bottom-full right-0 mb-2.5";
+          arrowClass = "absolute right-4 -bottom-1.5";
         }
       }
 
@@ -576,7 +637,8 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
       return (
         <div
           key={`res-${resource.id}`}
-          className={`absolute transition-all duration-500 ${showTooltip ? 'z-[100]' : (isRecommended ? 'z-40' : 'z-30')}`}
+          data-node-pin="true"
+          className={`absolute transition-all duration-300 ${showTooltip ? 'z-[100]' : (isRecommended ? 'z-40' : 'z-30')}`}
           style={{
             ...mapPercent(resource.position),
             width: `${100 / GRID_SIZE}%`,
@@ -684,46 +746,57 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-50/30 overflow-hidden">
-      <div className="flex-none px-6 py-4 bg-white/90 backdrop-blur-sm border-b border-gray-100 flex justify-between items-center z-10">
+    <div className="relative flex flex-col h-full bg-slate-50/50 overflow-hidden">
+      <div className="flex-none px-5 py-3.5 bg-white/95 backdrop-blur-md border-b border-slate-100 flex flex-wrap justify-between items-center gap-3 z-20">
         <div>
-          <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-            <MapPin className="w-5 h-5 text-blue-600" />
+          <h2 className="text-base font-bold text-slate-900 flex items-center gap-2 tracking-tight">
+            <MapPin className="w-4 h-4 text-blue-600" />
             Learning Environment
           </h2>
-          <p className="text-xs text-gray-500 mt-0.5">Explore resources and track your journey</p>
+          <p className="text-[11px] text-slate-500 mt-0.5">Drag or scroll to explore • Click any node to open lesson</p>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="flex items-center bg-white border border-gray-100 rounded-lg shadow-sm p-1">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center bg-slate-50/80 border border-slate-200/80 rounded-xl shadow-sm p-0.5">
             <button
-              onClick={() => setZoomLevel(prev => Math.max(1, prev - 0.25))}
-              className="p-1.5 hover:bg-gray-50 text-gray-500 transition-colors rounded-md"
+              onClick={() => handleZoomChange(prev => prev - 0.2)}
+              disabled={zoomLevel <= 0.6}
+              className="p-1.5 hover:bg-white disabled:opacity-40 text-slate-600 transition-all rounded-lg hover:shadow-xs"
               title="Zoom Out"
             >
-              <ZoomOut size={16} />
+              <ZoomOut size={15} />
             </button>
-            <div className="w-px h-4 bg-gray-100 mx-1"></div>
+            <div className="w-px h-3.5 bg-slate-200 mx-0.5"></div>
             <button
-              onClick={() => setZoomLevel(1.5)}
-              className="px-2 py-1 hover:bg-gray-50 text-gray-400 text-[10px] font-bold transition-colors rounded-md"
-              title="Reset Zoom"
+              onClick={() => handleZoomChange(() => 1)}
+              className="px-2.5 py-1 hover:bg-white text-slate-600 text-[11px] font-bold transition-all rounded-lg min-w-[48px] text-center"
+              title="Reset to 100%"
             >
               {Math.round(zoomLevel * 100)}%
             </button>
-            <div className="w-px h-4 bg-gray-100 mx-1"></div>
+            <div className="w-px h-3.5 bg-slate-200 mx-0.5"></div>
             <button
-              onClick={() => setZoomLevel(prev => Math.min(3, prev + 0.25))}
-              className="p-1.5 hover:bg-gray-50 text-gray-500 transition-colors rounded-md"
+              onClick={() => handleZoomChange(prev => prev + 0.2)}
+              disabled={zoomLevel >= 2.5}
+              className="p-1.5 hover:bg-white disabled:opacity-40 text-slate-600 transition-all rounded-lg hover:shadow-xs"
               title="Zoom In"
             >
-              <ZoomIn size={16} />
+              <ZoomIn size={15} />
             </button>
           </div>
 
           <button
+            onClick={() => centerOnAgent(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-xl transition-all shadow-xs"
+            title="Center on your position"
+          >
+            <MapPin className="w-3.5 h-3.5 text-blue-600" />
+            <span>Center</span>
+          </button>
+
+          <button
             onClick={() => setIsSearching(true)}
-            className="flex items-center gap-2 px-3 py-1.5 bg-white border border-blue-200 hover:bg-blue-50 text-blue-600 text-xs font-semibold rounded-lg transition-all shadow-sm"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-blue-200 hover:bg-blue-50 text-blue-600 text-xs font-semibold rounded-xl transition-all shadow-xs"
           >
             <Search className="w-3.5 h-3.5" />
             <span>Search</span>
@@ -732,43 +805,43 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
           {isSimulationRunning && (
             <button
               onClick={onRefreshDQNPath}
-              className="flex items-center gap-2 px-3 py-1.5 bg-white border border-red-200 hover:bg-red-50 text-red-600 text-xs font-semibold rounded-lg transition-all shadow-sm group"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 hover:bg-red-50 text-red-600 text-xs font-semibold rounded-xl transition-all shadow-xs group"
             >
               <RefreshCw className="w-3.5 h-3.5 group-hover:rotate-180 transition-transform duration-500" />
               <span>Optimize Path</span>
             </button>
           )}
 
-          <div className="flex items-center gap-3 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100">
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-full border border-blue-200 overflow-hidden bg-white shadow-sm">
+          <div className="flex items-center gap-2.5 bg-slate-50/90 px-3 py-1.5 rounded-xl border border-slate-200/70">
+            <div className="flex items-center gap-1.5">
+              <div className="w-4 h-4 rounded-full border border-blue-200 overflow-hidden bg-white shadow-xs">
                 <img src={avatar} alt="Avatar" className="w-full h-full object-cover" />
               </div>
-              <span className="text-xs font-medium text-gray-600">You (Agent)</span>
+              <span className="text-[11px] font-medium text-slate-600">You</span>
             </div>
-            <div className="w-px h-3 bg-gray-200"></div>
+            <div className="w-px h-3 bg-slate-200"></div>
             <div className="flex items-center gap-1.5">
               <div className="w-2.5 h-2.5 bg-[#A855F7] rounded-full"></div>
-              <span className="text-xs font-medium text-gray-600">Resource</span>
+              <span className="text-[11px] font-medium text-slate-600">Lesson</span>
             </div>
             {assimilationPoints.length > 0 && (
               <>
-                <div className="w-px h-3 bg-gray-200"></div>
+                <div className="w-px h-3 bg-slate-200"></div>
                 <div className="flex items-center gap-1.5">
                   <Diamond className="w-3 h-3 text-cyan-500 fill-cyan-400" />
-                  <span className="text-xs font-medium text-gray-600">Assimilation</span>
+                  <span className="text-[11px] font-medium text-slate-600">Target</span>
                 </div>
               </>
             )}
             {assimilationPath.length >= 2 && (
               <>
-                <div className="w-px h-3 bg-gray-200"></div>
+                <div className="w-px h-3 bg-slate-200"></div>
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-0.5 bg-gradient-to-r from-cyan-400 via-purple-500 to-pink-500 rounded-full"></div>
-                  <span className="text-xs font-medium text-gray-600">Path</span>
+                  <span className="text-[11px] font-medium text-slate-600">Path</span>
                   <button
                     onClick={() => setShowAssimilationPath(prev => !prev)}
-                    className={`relative w-7 h-4 rounded-full transition-colors duration-200 ${showAssimilationPath ? 'bg-purple-500' : 'bg-gray-300'}`}
+                    className={`relative w-7 h-4 rounded-full transition-colors duration-200 ${showAssimilationPath ? 'bg-purple-500' : 'bg-slate-300'}`}
                   >
                     <span
                       className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform duration-200 ${showAssimilationPath ? 'translate-x-3' : 'translate-x-0'}`}
@@ -782,7 +855,7 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
       </div>
 
       {((isSimulationRunning && dqnPathInfo?.resource) || nextRecommendation) && (
-        <div className="absolute top-20 right-6 z-20 animate-in slide-in-from-top-4 fade-in duration-300 pointer-events-none">
+        <div className="absolute top-20 right-5 z-30 animate-in slide-in-from-top-4 fade-in duration-300 pointer-events-none">
           <div
             onClick={() => {
               const recId = isSimulationRunning && dqnPathInfo?.resource ? dqnPathInfo.resource.id : nextRecommendation?.id;
@@ -792,18 +865,18 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
                 onResourceClick(target, true);
               }
             }}
-            className="bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-lg border border-indigo-200 ring-1 ring-indigo-50 w-72 pointer-events-auto cursor-pointer hover:shadow-xl transition-all"
+            className="bg-white/95 backdrop-blur-md px-4 py-3 rounded-2xl shadow-lg border border-indigo-200/80 ring-1 ring-indigo-50 w-72 pointer-events-auto cursor-pointer hover:shadow-xl hover:border-indigo-300 transition-all"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <span className="text-[10px] font-black tracking-wider text-indigo-600 uppercase block">
                   {isSimulationRunning && dqnPathInfo?.resource ? 'DQN Recommendation' : 'Next Recommended Lesson'}
                 </span>
-                <h3 className="text-sm font-bold text-gray-900 mt-0.5 line-clamp-2">
+                <h3 className="text-sm font-bold text-slate-900 mt-0.5 line-clamp-2">
                   {isSimulationRunning && dqnPathInfo?.resource ? dqnPathInfo.resource.title : nextRecommendation?.title}
                 </h3>
                 {!isSimulationRunning && nextRecommendation?.module && (
-                  <p className="text-[10px] text-gray-500 font-medium truncate mt-0.5">{nextRecommendation.module}</p>
+                  <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">{nextRecommendation.module}</p>
                 )}
               </div>
               {isSimulationRunning && dqnPathInfo?.resource && (
@@ -816,22 +889,28 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
         </div>
       )}
 
-      <div className="flex-1 w-full relative overflow-auto bg-gray-50/30" ref={gridRef}>
-        <div className="min-w-full min-h-full flex items-center justify-center p-8">
+      <div
+        ref={gridRef}
+        onMouseDown={handlePanStart}
+        onMouseMove={handlePanMove}
+        onMouseUp={handlePanEnd}
+        onMouseLeave={handlePanEnd}
+        className={`flex-1 w-full relative overflow-auto bg-slate-100/60 select-none ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`}
+      >
+        <div className="min-w-full min-h-full w-max flex p-9">
           <div
-            className="grid gap-0 bg-[#F8FAFC] rounded-3xl shadow-2xl p-4 shrink-0 relative overflow-hidden"
+            className="m-auto grid gap-0 bg-[#F8FAFC] rounded-3xl shadow-xl border border-slate-200/80 p-4 shrink-0 relative"
             style={{
-              width: `${1000 * zoomLevel}px`,
-              height: `${1000 * zoomLevel}px`,
+              width: `${MAP_SIZE * zoomLevel}px`,
+              height: `${MAP_SIZE * zoomLevel}px`,
               gridTemplateColumns: `repeat(${GRID_SIZE}, 1fr)`,
               gridTemplateRows: `repeat(${GRID_SIZE}, 1fr)`,
-              backgroundImage: `radial-gradient(#E2E8F0 1.5px, transparent 1.5px)`,
+              backgroundImage: `radial-gradient(#CBD5E1 1.5px, transparent 1.5px)`,
               backgroundSize: `${24 * zoomLevel}px ${24 * zoomLevel}px`,
-              transition: 'width 0.3s ease-out, height 0.3s ease-out'
             }}
           >
             {/* Map Terrain: color-coded 0°-90° quarter-circle arcs with hover tooltips */}
-            <div className="absolute inset-0 pointer-events-none z-0">
+            <div className="absolute inset-0 pointer-events-none z-0 rounded-3xl overflow-hidden">
               <svg className="absolute inset-0 w-full h-full" viewBox="0 0 1000 1000" preserveAspectRatio="none">
                 {/* Color-coded concentric arcs — each arc belongs to a tier */}
                 {(() => {

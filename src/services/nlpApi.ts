@@ -525,12 +525,74 @@ class NLPLearningAPI implements LearningPlannerAPI {
     return response.json();
   }
 
+  async getOrchestratorPlan(
+    module: string,
+    visitedModules: string[] = [],
+    studentLevel: number = 1
+  ): Promise<{
+    lessonProfile: {
+      id: string;
+      title: string;
+      module: string;
+      difficulty: number;
+      nature: string;
+      isVisited: boolean;
+      summariesCount?: number;
+    };
+    primaryAgent: 'coach' | 'notes' | 'flashcards' | 'quiz';
+    suggestedQuizDifficulty: 'easy' | 'medium' | 'hard';
+    recommendedSequence: ('coach' | 'notes' | 'flashcards' | 'quiz')[];
+    reasoning: string;
+    source: string;
+  }> {
+    const response = await apiFetch(`${API_BASE}/agent/plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        module,
+        visited_modules: visitedModules,
+        student_level: studentLevel
+      })
+    });
+    if (!response.ok) throw new Error('Failed to fetch study recommendation plan');
+    return response.json();
+  }
+
+  async studyAgentChat(
+    question: string,
+    module: string,
+    history: { role: 'user' | 'assistant'; content: string }[] = [],
+    visitedModules: string[] = [],
+    studentLevel: number = 1
+  ): Promise<{
+    answer: string;
+    source: string;
+    summariesUsed: number;
+    visitedCount: number;
+  }> {
+    const response = await apiFetch(`${API_BASE}/agent/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        module,
+        history,
+        visited_modules: visitedModules,
+        student_level: studentLevel
+      })
+    });
+    if (!response.ok) throw new Error('Failed to get study chat response');
+    return response.json();
+  }
+
   async generateAgentQuiz(
     module: string,
-    numQuestions: number = 3
+    numQuestions: number = 3,
+    difficulty: 'easy' | 'medium' | 'hard' = 'medium'
   ): Promise<{
     module: string;
     title: string;
+    difficulty: 'easy' | 'medium' | 'hard';
     source: string;
     questions: {
       id: string;
@@ -543,7 +605,7 @@ class NLPLearningAPI implements LearningPlannerAPI {
     const response = await apiFetch(`${API_BASE}/agent/quiz`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ module, num_questions: numQuestions })
+      body: JSON.stringify({ module, num_questions: numQuestions, difficulty })
     });
     if (!response.ok) throw new Error('Failed to generate quiz');
     return response.json();
@@ -558,6 +620,7 @@ class NLPLearningAPI implements LearningPlannerAPI {
     lessonTitle: string;
     overview: string;
     takeaways: string[];
+    examTip?: string;
     flashcards: { front: string; back: string }[];
     formattedNote: string;
     source: string;
@@ -569,6 +632,40 @@ class NLPLearningAPI implements LearningPlannerAPI {
       body: JSON.stringify({ module, save_to_hub: saveToHub })
     });
     if (!response.ok) throw new Error('Failed to generate study notes');
+    return response.json();
+  }
+
+  async generateAgentFlashcards(
+    module: string
+  ): Promise<{
+    flashcards: { front: string; back: string; tag?: string }[];
+    source: string;
+  }> {
+    const response = await apiFetch(`${API_BASE}/agent/flashcards`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ module })
+    });
+    if (!response.ok) throw new Error('Failed to generate flashcards');
+    return response.json();
+  }
+
+  async generateAgentCoach(
+    module: string,
+    visitedModules: string[] = []
+  ): Promise<{
+    intuition: string;
+    prerequisiteBridge: string;
+    realWorldAnalogy: string;
+    stepByStepBreakdown: string[];
+    source: string;
+  }> {
+    const response = await apiFetch(`${API_BASE}/agent/coach`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ module, visited_modules: visitedModules })
+    });
+    if (!response.ok) throw new Error('Failed to generate concept coach breakdown');
     return response.json();
   }
 }

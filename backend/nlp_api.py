@@ -1368,20 +1368,9 @@ INSTRUCTIONS:
 
     return jsonify({'answer': answer, 'source': 'transcript-lookup'})
 
-@app.route('/api/agent/orchestrate', methods=['POST'])
-def orchestrate_agents_route():
-    """
-    Main Hierarchical Orchestrator endpoint.
-    Analyses the current lesson & student state, decides which subagent is best suited,
-    allocates directives, and returns orchestrated outputs from all 4 subagents
-    (ConceptCoachSubAgent, NotesSubAgent, FlashcardSubAgent, QuizSubAgent).
-    """
-    data = request.get_json() or {}
-    module = data.get('module', 'Pre training objectives')
-    active_subagent = data.get('active_subagent')
-    session_id = current_user_id()
+def _get_student_learning_context(session_id: str, data: dict):
+    """Fetch the student's latest progress, visited modules, level, and ALL previous summaries."""
     session = get_session(session_id)
-
     visited_ids = set(str(v).strip() for v in session.get('visitedResources', []))
     visited_modules = [
         r['module'] for r in nlp_resources if str(r['id']).strip() in visited_ids
@@ -1391,6 +1380,86 @@ def orchestrate_agents_route():
 
     student_level = int(data.get('student_level') or session.get('level', 1))
 
+    student_summaries = []
+    try:
+        try:
+            from .database import load_db
+        except (ImportError, ValueError):
+            from database import load_db
+        db = load_db(session_id)
+        student_summaries = db.get('summaries', [])
+    except Exception as e:
+        print(f"[AGENT_CONTEXT] Could not load summaries for {session_id}: {e}")
+
+    return visited_modules, student_level, student_summaries
+
+
+@app.route('/api/agent/plan', methods=['POST'])
+def get_orchestrator_plan_route():
+    """Lightweight Main Orchestrator check using latest progress & all summaries."""
+    data = request.get_json() or {}
+    module = data.get('module', 'Pre training objectives')
+    session_id = current_user_id()
+    visited_modules, student_level, student_summaries = _get_student_learning_context(session_id, data)
+    try:
+        entry = study_agent._find_module_entry(module, nlp_resources)
+        plan = study_agent.OrchestratorAgent.plan_allocation(
+            entry=entry,
+            visited_modules=visited_modules,
+            student_level=student_level,
+            student_summaries=student_summaries,
+            ai_client=get_ai_client(),
+        )
+        return jsonify(plan)
+    except Exception as e:
+        print(f"[ORCHESTRATOR_PLAN] Error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agent/chat', methods=['POST'])
+def study_agent_chat_route():
+    """Brief, plain-language student chat tutor aware of progress & all previous summaries."""
+    data = request.get_json() or {}
+    question = str(data.get('question', '')).strip()
+    if not question:
+        return jsonify({'answer': 'Ask me anything about your lessons or progress!', 'source': 'none'})
+
+    module = data.get('module', 'Pre training objectives')
+    history = data.get('history', [])
+    session_id = current_user_id()
+    visited_modules, student_level, student_summaries = _get_student_learning_context(session_id, data)
+
+    try:
+        entry = study_agent._find_module_entry(module, nlp_resources)
+        result = study_agent.StudyChatAgent.run(
+            question=question,
+            entry=entry,
+            visited_modules=visited_modules,
+            student_level=student_level,
+            student_summaries=student_summaries,
+            history=history,
+            ai_client=get_ai_client(),
+        )
+        return jsonify(result)
+    except Exception as e:
+        print(f"[STUDY_CHAT] Error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agent/orchestrate', methods=['POST'])
+def orchestrate_agents_route():
+    """
+    Main Hierarchical Orchestrator endpoint.
+    Analyses the current lesson, student status, and ALL previous summaries,
+    decides which helper is best suited, allocates directives, and returns outputs.
+    """
+    data = request.get_json() or {}
+    module = data.get('module', 'Pre training objectives')
+    active_subagent = data.get('active_subagent')
+    quiz_difficulty = data.get('quiz_difficulty')
+    session_id = current_user_id()
+    visited_modules, student_level, student_summaries = _get_student_learning_context(session_id, data)
+
     try:
         result = study_agent.OrchestratorAgent.orchestrate(
             module_or_title=module,
@@ -1399,6 +1468,8 @@ def orchestrate_agents_route():
             student_level=student_level,
             ai_client=get_ai_client(),
             active_subagent=active_subagent,
+            student_summaries=student_summaries,
+            quiz_difficulty=quiz_difficulty,
         )
         return jsonify(result)
     except Exception as e:
@@ -1408,16 +1479,23 @@ def orchestrate_agents_route():
 
 @app.route('/api/agent/quiz', methods=['POST'])
 def generate_agent_quiz_route():
-    """Generate a free, module-grounded concept check quiz via the AI Study Agent."""
+    """Generate a 3-level adaptive quiz ('easy', 'medium', 'hard') aware of all student summaries."""
     data = request.get_json() or {}
     module = data.get('module', 'Pre training objectives')
     num_questions = int(data.get('num_questions', 3))
+    difficulty = str(data.get('difficulty', 'medium')).strip().lower()
+    session_id = current_user_id()
+    visited_modules, student_level, student_summaries = _get_student_learning_context(session_id, data)
     try:
         quiz_data = study_agent.generate_module_quiz(
             module_or_title=module,
             nlp_resources=nlp_resources,
             ai_client=get_ai_client(),
-            num_questions=num_questions
+            num_questions=num_questions,
+            difficulty=difficulty,
+            student_summaries=student_summaries,
+            visited_modules=visited_modules,
+            student_level=student_level,
         )
         return jsonify(quiz_data)
     except Exception as e:
@@ -1427,18 +1505,21 @@ def generate_agent_quiz_route():
 
 @app.route('/api/agent/study-notes', methods=['POST'])
 def generate_agent_study_notes_route():
-    """Generate structured study notes and flashcards for a module via the AI Study Agent."""
+    """Generate structured, editable study notes aware of all student summaries."""
     data = request.get_json() or {}
     module = data.get('module', 'Pre training objectives')
     save_to_hub = bool(data.get('save_to_hub', False))
+    session_id = current_user_id()
+    _, student_level, student_summaries = _get_student_learning_context(session_id, data)
     try:
         notes_data = study_agent.generate_study_notes(
             module_or_title=module,
             nlp_resources=nlp_resources,
-            ai_client=get_ai_client()
+            ai_client=get_ai_client(),
+            student_summaries=student_summaries,
+            student_level=student_level,
         )
         if save_to_hub:
-            session_id = current_user_id()
             saved_note = add_note(session_id, {
                 'section': 'nlp',
                 'title': notes_data['title'],
@@ -1448,6 +1529,49 @@ def generate_agent_study_notes_route():
         return jsonify(notes_data)
     except Exception as e:
         print(f"[STUDY_AGENT] Study notes generation error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agent/flashcards', methods=['POST'])
+def generate_agent_flashcards_route():
+    """Generate active-recall flashcards aware of all student summaries."""
+    data = request.get_json() or {}
+    module = data.get('module', 'Pre training objectives')
+    session_id = current_user_id()
+    _, _, student_summaries = _get_student_learning_context(session_id, data)
+    try:
+        entry = study_agent._find_module_entry(module, nlp_resources)
+        cards = study_agent.FlashcardSubAgent.run(
+            entry=entry,
+            directive=f"Create 6 quick active-recall flashcards for '{entry['title']}'.",
+            student_summaries=student_summaries,
+            ai_client=get_ai_client(),
+        )
+        return jsonify(cards)
+    except Exception as e:
+        print(f"[STUDY_AGENT] Flashcards error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agent/coach', methods=['POST'])
+def generate_agent_coach_route():
+    """Generate Concept Coach intuition & prerequisite bridge aware of all student summaries."""
+    data = request.get_json() or {}
+    module = data.get('module', 'Pre training objectives')
+    session_id = current_user_id()
+    visited_modules, _, student_summaries = _get_student_learning_context(session_id, data)
+    try:
+        entry = study_agent._find_module_entry(module, nlp_resources)
+        coach_data = study_agent.ConceptCoachSubAgent.run(
+            entry=entry,
+            directive=f"Explain '{entry['title']}' in simple words and connect it to the student's past summaries.",
+            visited_modules=visited_modules,
+            student_summaries=student_summaries,
+            ai_client=get_ai_client(),
+        )
+        return jsonify(coach_data)
+    except Exception as e:
+        print(f"[STUDY_AGENT] Coach error: {e}")
         return jsonify({'error': str(e)}), 500
 
 

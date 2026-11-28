@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LearningSummary, Polyline, Resource } from '../types';
 import { nlpApi } from '../services/nlpApi';
-import { X, BookOpen, Activity, Map, PlayCircle, HelpCircle, Sparkles, CheckCircle, TrendingUp, Search, Bookmark, Mic, MicOff, Brain, FileText, RefreshCw, Check } from 'lucide-react';
+import { X, BookOpen, Activity, Map, PlayCircle, HelpCircle, Sparkles, CheckCircle, TrendingUp, Search, Bookmark, Mic, MicOff, FileText, RefreshCw, Check, MessageSquare, Send, Layers, Bold, Italic, List, ListOrdered, Heading2, Eye, Edit3 } from 'lucide-react';
 
 interface ControlPanelProps {
   onSummarizeLearning: (title: string, summary: string) => void;
@@ -46,14 +46,37 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [showPolylineModal, setShowPolylineModal] = useState(false);
   const [showPolylineListModal, setShowPolylineListModal] = useState(false);
-  const [showAgentModal, setShowAgentModal] = useState(false);
-  const [agentTab, setAgentTab] = useState<'coach' | 'notes' | 'flashcards' | 'quiz'>('notes');
-  const [agentModule, setAgentModule] = useState<string>('Pre training objectives');
-  const [agentLoading, setAgentLoading] = useState(false);
-  const [orchestratedData, setOrchestratedData] = useState<Awaited<ReturnType<typeof nlpApi.orchestrateStudyAgents>> | null>(null);
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
-  const [flippedCards, setFlippedCards] = useState<Record<number, boolean>>({});
+  const [activeFeature, setActiveFeature] = useState<'chat' | 'notes' | 'quiz' | 'flashcards' | 'coach' | null>(null);
+  const [featureModule, setFeatureModule] = useState<string>('Pre training objectives');
+  const [featureLoading, setFeatureLoading] = useState(false);
+  const [orchestratorPlan, setOrchestratorPlan] = useState<Awaited<ReturnType<typeof nlpApi.getOrchestratorPlan>> | null>(null);
+
+  // Study Chat state
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([
+    { role: 'assistant', content: 'Hi! I know your progress and past summaries. Ask me anything about your lessons and I will explain it simply.' }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatSending, setChatSending] = useState(false);
+  const [chatMeta, setChatMeta] = useState<{ summariesUsed: number; visitedCount: number } | null>(null);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Editable Smart Notes state
+  const [noteTitle, setNoteTitle] = useState('');
+  const [noteContent, setNoteContent] = useState('');
+  const [notePreviewMode, setNotePreviewMode] = useState(false);
   const [noteSaved, setNoteSaved] = useState(false);
+  const noteTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // 3-Level Adaptive Quiz state
+  const [quizDifficulty, setQuizDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
+  const [quizData, setQuizData] = useState<Awaited<ReturnType<typeof nlpApi.generateAgentQuiz>> | null>(null);
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
+
+  // Flashcards & Concept Coach state
+  const [flashcardsData, setFlashcardsData] = useState<Awaited<ReturnType<typeof nlpApi.generateAgentFlashcards>> | null>(null);
+  const [flippedCards, setFlippedCards] = useState<Record<number, boolean>>({});
+  const [coachData, setCoachData] = useState<Awaited<ReturnType<typeof nlpApi.generateAgentCoach>> | null>(null);
+
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
   const [selectedPolyline, setSelectedPolyline] = useState<Polyline | null>(null);
@@ -61,44 +84,167 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const [showPersonaTooltip, setShowPersonaTooltip] = useState(false);
   const recognitionRef = useRef<any>(null);
 
-  const runOrchestrator = async (targetModule: string) => {
-    setAgentLoading(true);
+  const getDefaultModule = () =>
+    nextRecommendation?.module ||
+    nextRecommendation?.title ||
+    resources.find(r => !r.visited)?.module ||
+    'Pre training objectives';
+
+  // Keep the Main Orchestrator silently synced with the student's latest status & summaries
+  useEffect(() => {
+    const mod = getDefaultModule();
+    const visitedMods = resources.filter(r => r.visited).map(r => r.module);
+    let cancelled = false;
+    nlpApi.getOrchestratorPlan(mod, visitedMods, learningData.currentLevel || 1)
+      .then(plan => {
+        if (!cancelled) {
+          setOrchestratorPlan(plan);
+          if (plan.suggestedQuizDifficulty) {
+            setQuizDifficulty(plan.suggestedQuizDifficulty);
+          }
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [nextRecommendation?.module, learningData.visitedResources, learningData.currentLevel, polylines.length]);
+
+  useEffect(() => {
+    if (activeFeature === 'chat') {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, activeFeature]);
+
+  const loadNotesForModule = async (mod: string) => {
+    setFeatureLoading(true);
     setNoteSaved(false);
-    setSelectedAnswers({});
-    setFlippedCards({});
+    setNotePreviewMode(false);
     try {
-      const visitedMods = resources.filter(r => r.visited).map(r => r.module);
-      const res = await nlpApi.orchestrateStudyAgents(
-        targetModule,
-        visitedMods,
-        learningData.currentLevel || 1
-      );
-      setOrchestratedData(res);
-      if (res.orchestrator?.primaryAgent) {
-        setAgentTab(res.orchestrator.primaryAgent);
-      }
+      const res = await nlpApi.generateAgentStudyNotes(mod, false);
+      setNoteTitle(res.title || `Study Notes: ${mod}`);
+      setNoteContent(res.formattedNote || '');
     } catch (err) {
-      console.error('Failed to run Multi-Agent Orchestrator:', err);
+      console.error('Failed to load study notes:', err);
     } finally {
-      setAgentLoading(false);
+      setFeatureLoading(false);
     }
   };
 
-  const handleOpenStudyAgent = () => {
-    const defaultMod = nextRecommendation?.module || nextRecommendation?.title || resources.find(r => !r.visited)?.module || 'Pre training objectives';
-    setAgentModule(defaultMod);
-    setShowAgentModal(true);
-    runOrchestrator(defaultMod);
+  const loadQuizForModule = async (mod: string, difficulty: 'easy' | 'medium' | 'hard') => {
+    setFeatureLoading(true);
+    setSelectedAnswers({});
+    try {
+      const res = await nlpApi.generateAgentQuiz(mod, 3, difficulty);
+      setQuizData(res);
+    } catch (err) {
+      console.error('Failed to load quiz:', err);
+    } finally {
+      setFeatureLoading(false);
+    }
+  };
+
+  const loadFlashcardsForModule = async (mod: string) => {
+    setFeatureLoading(true);
+    setFlippedCards({});
+    try {
+      const res = await nlpApi.generateAgentFlashcards(mod);
+      setFlashcardsData(res);
+    } catch (err) {
+      console.error('Failed to load flashcards:', err);
+    } finally {
+      setFeatureLoading(false);
+    }
+  };
+
+  const loadCoachForModule = async (mod: string) => {
+    setFeatureLoading(true);
+    try {
+      const visitedMods = resources.filter(r => r.visited).map(r => r.module);
+      const res = await nlpApi.generateAgentCoach(mod, visitedMods);
+      setCoachData(res);
+    } catch (err) {
+      console.error('Failed to load concept coach:', err);
+    } finally {
+      setFeatureLoading(false);
+    }
+  };
+
+  const openFeature = (feature: 'chat' | 'notes' | 'quiz' | 'flashcards' | 'coach') => {
+    const mod = getDefaultModule();
+    setFeatureModule(mod);
+    setActiveFeature(feature);
+    if (feature === 'notes') {
+      loadNotesForModule(mod);
+    } else if (feature === 'quiz') {
+      loadQuizForModule(mod, quizDifficulty);
+    } else if (feature === 'flashcards') {
+      loadFlashcardsForModule(mod);
+    } else if (feature === 'coach') {
+      loadCoachForModule(mod);
+    }
+  };
+
+  const handleFeatureModuleChange = (mod: string) => {
+    setFeatureModule(mod);
+    if (activeFeature === 'notes') loadNotesForModule(mod);
+    else if (activeFeature === 'quiz') loadQuizForModule(mod, quizDifficulty);
+    else if (activeFeature === 'flashcards') loadFlashcardsForModule(mod);
+    else if (activeFeature === 'coach') loadCoachForModule(mod);
+  };
+
+  const handleSendChat = async (customPrompt?: string) => {
+    const text = (customPrompt ?? chatInput).trim();
+    if (!text || chatSending) return;
+    const updatedHistory = [...chatMessages, { role: 'user' as const, content: text }];
+    setChatMessages(updatedHistory);
+    setChatInput('');
+    setChatSending(true);
+    try {
+      const visitedMods = resources.filter(r => r.visited).map(r => r.module);
+      const res = await nlpApi.studyAgentChat(
+        text,
+        featureModule,
+        chatMessages,
+        visitedMods,
+        learningData.currentLevel || 1
+      );
+      setChatMessages([...updatedHistory, { role: 'assistant', content: res.answer }]);
+      setChatMeta({ summariesUsed: res.summariesUsed, visitedCount: res.visitedCount });
+    } catch (err) {
+      console.error('Study chat error:', err);
+      setChatMessages([...updatedHistory, { role: 'assistant', content: 'Sorry, I could not reach the study tutor right now. Please try again.' }]);
+    } finally {
+      setChatSending(false);
+    }
+  };
+
+  const applyNoteFormatting = (format: 'bold' | 'italic' | 'heading' | 'bullet' | 'numbered') => {
+    const el = noteTextareaRef.current;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const selected = noteContent.slice(start, end) || 'text';
+    let replacement = selected;
+    if (format === 'bold') replacement = `**${selected}**`;
+    else if (format === 'italic') replacement = `*${selected}*`;
+    else if (format === 'heading') replacement = `\n### ${selected}\n`;
+    else if (format === 'bullet') replacement = `\n- ${selected}`;
+    else if (format === 'numbered') replacement = `\n1. ${selected}`;
+    const updated = noteContent.slice(0, start) + replacement + noteContent.slice(end);
+    setNoteContent(updated);
+    setNoteSaved(false);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(start + replacement.length, start + replacement.length);
+    });
   };
 
   const handleSaveStudyNoteToHub = async () => {
-    const notesOut = orchestratedData?.outputs?.notes;
-    if (!notesOut) return;
+    if (!noteTitle.trim() && !noteContent.trim()) return;
     try {
       await nlpApi.addNote('default', {
         section: 'nlp',
-        title: notesOut.title,
-        content: notesOut.formattedNote
+        title: noteTitle.trim() || `Study Notes: ${featureModule}`,
+        content: noteContent
       });
       setNoteSaved(true);
     } catch (err) {
@@ -353,14 +499,80 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             Summarize Learning
           </button>
 
-          <button
-            onClick={handleOpenStudyAgent}
-            disabled={isLoading}
-            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-white border border-gray-200 hover:bg-gray-50 hover:border-brand/40 text-gray-700 text-sm rounded-xl font-medium transition-all shadow-xs"
-          >
-            <Brain className="w-4 h-4 text-brand" />
-            AI Study Agent (Quiz & Notes)
-          </button>
+          {/* Independent Study Features (Orchestrated behind the scenes) */}
+          <div className="pt-1 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Study Tools</span>
+              {orchestratorPlan?.primaryAgent && (
+                <span className="text-[10px] font-semibold text-brand">
+                  Suggested: {({ coach: 'Concept Coach', notes: 'Smart Notes', flashcards: 'Flashcards', quiz: 'Concept Quiz' })[orchestratorPlan.primaryAgent]}
+                </span>
+              )}
+            </div>
+
+            <button
+              onClick={() => openFeature('chat')}
+              disabled={isLoading}
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-white border border-gray-200 hover:bg-gray-50 hover:border-brand/40 text-gray-700 text-sm rounded-xl font-medium transition-all shadow-xs"
+            >
+              <MessageSquare className="w-4 h-4 text-brand" />
+              Study Chat
+            </button>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => openFeature('notes')}
+                disabled={isLoading}
+                className={`relative flex items-center justify-center gap-1.5 py-2.5 px-3 bg-white border text-xs rounded-xl font-medium transition-all shadow-xs ${
+                  orchestratorPlan?.primaryAgent === 'notes'
+                    ? 'border-brand/60 text-gray-900 bg-blue-50/30'
+                    : 'border-gray-200 hover:bg-gray-50 hover:border-brand/40 text-gray-700'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5 text-brand" />
+                Smart Notes
+              </button>
+
+              <button
+                onClick={() => openFeature('quiz')}
+                disabled={isLoading}
+                className={`relative flex items-center justify-center gap-1.5 py-2.5 px-3 bg-white border text-xs rounded-xl font-medium transition-all shadow-xs ${
+                  orchestratorPlan?.primaryAgent === 'quiz'
+                    ? 'border-brand/60 text-gray-900 bg-blue-50/30'
+                    : 'border-gray-200 hover:bg-gray-50 hover:border-brand/40 text-gray-700'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-brand" />
+                Concept Quiz
+              </button>
+
+              <button
+                onClick={() => openFeature('flashcards')}
+                disabled={isLoading}
+                className={`relative flex items-center justify-center gap-1.5 py-2.5 px-3 bg-white border text-xs rounded-xl font-medium transition-all shadow-xs ${
+                  orchestratorPlan?.primaryAgent === 'flashcards'
+                    ? 'border-brand/60 text-gray-900 bg-blue-50/30'
+                    : 'border-gray-200 hover:bg-gray-50 hover:border-brand/40 text-gray-700'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5 text-brand" />
+                Flashcards
+              </button>
+
+              <button
+                onClick={() => openFeature('coach')}
+                disabled={isLoading}
+                className={`relative flex items-center justify-center gap-1.5 py-2.5 px-3 bg-white border text-xs rounded-xl font-medium transition-all shadow-xs ${
+                  orchestratorPlan?.primaryAgent === 'coach'
+                    ? 'border-brand/60 text-gray-900 bg-blue-50/30'
+                    : 'border-gray-200 hover:bg-gray-50 hover:border-brand/40 text-gray-700'
+                }`}
+              >
+                <TrendingUp className="w-3.5 h-3.5 text-brand" />
+                Concept Coach
+              </button>
+            </div>
+          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <button
@@ -1086,52 +1298,264 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         </div>
       )}
 
-      {/* Hierarchical Multi-Agent Study Modal (Main Orchestrator + 4 Specialized Subagents) */}
-      {showAgentModal && (
+      {/* ==================== INDEPENDENT FEATURE 1: STUDY CHAT ==================== */}
+      {activeFeature === 'chat' && (
         <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-center justify-center z-[110] p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden border border-gray-100">
-            {/* Header */}
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl h-[82vh] flex flex-col overflow-hidden border border-gray-100">
             <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-white">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 bg-brand/10 rounded-xl text-brand">
-                  <Brain className="w-5 h-5" />
+                  <MessageSquare className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-lg font-bold text-gray-900">Multi-Agent Learning Orchestrator</h3>
-                    {orchestratedData?.orchestrator?.source && (
-                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-blue-50 text-brand border border-blue-100">
-                        {orchestratedData.orchestrator.source.includes('groq')
-                          ? `⚡ ${orchestratedData.orchestrator.source.replace('groq-', 'Groq • ')}`
-                          : 'Local Multi-Agent'}
-                      </span>
-                    )}
-                  </div>
+                  <h3 className="text-lg font-bold text-gray-900">Study Chat</h3>
                   <p className="text-xs text-gray-400 mt-0.5">
-                    Hierarchical Orchestrator dynamically allocates tasks to specialized subagents for the active lesson
+                    Short, simple answers tailored to your progress{chatMeta ? ` • ${chatMeta.summariesUsed} summaries synced` : ''}
                   </p>
                 </div>
               </div>
               <button
-                onClick={() => setShowAgentModal(false)}
+                onClick={() => setActiveFeature(null)}
                 className="p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Lesson Selector Bar */}
-            <div className="px-6 py-3 bg-gray-50/70 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="px-5 py-2.5 bg-gray-50/70 border-b border-gray-100 flex items-center gap-2">
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider shrink-0">Lesson:</span>
+              <select
+                value={featureModule}
+                onChange={(e) => setFeatureModule(e.target.value)}
+                className="flex-1 min-w-0 text-xs font-medium text-gray-800 bg-white border border-gray-200 rounded-xl px-3 py-1.5 outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand"
+              >
+                {(resources.length > 0 ? resources.map(r => r.module) : topicLegendItems).map((mod, idx) => (
+                  <option key={idx} value={mod}>{mod}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-3">
+              {chatMessages.map((msg, idx) => (
+                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-xs leading-relaxed whitespace-pre-wrap ${
+                    msg.role === 'user'
+                      ? 'bg-brand text-white rounded-br-sm'
+                      : 'bg-gray-50 border border-gray-200 text-gray-800 rounded-bl-sm'
+                  }`}>
+                    {msg.content}
+                  </div>
+                </div>
+              ))}
+              {chatSending && (
+                <div className="flex justify-start">
+                  <div className="px-4 py-2.5 rounded-2xl bg-gray-50 border border-gray-200 text-xs text-gray-500 flex items-center gap-2">
+                    <RefreshCw className="w-3.5 h-3.5 text-brand animate-spin" />
+                    Thinking...
+                  </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+
+            <div className="px-5 pt-2 pb-4 border-t border-gray-100 bg-white space-y-2.5">
+              <div className="flex flex-wrap gap-1.5">
+                {['Explain this lesson simply', 'How am I doing based on my summaries?', 'Give me a quick example'].map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    onClick={() => handleSendChat(q)}
+                    disabled={chatSending}
+                    className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-gray-50 border border-gray-200 hover:border-brand/40 hover:bg-blue-50/40 text-gray-600 transition-colors"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSendChat(); }}
+                  placeholder="Ask any question about this lesson or your progress..."
+                  className="flex-1 text-xs text-gray-800 bg-gray-50 border border-gray-200 rounded-xl px-3.5 py-2.5 outline-none focus:bg-white focus:ring-2 focus:ring-brand/20 focus:border-brand"
+                />
+                <button
+                  onClick={() => handleSendChat()}
+                  disabled={chatSending || !chatInput.trim()}
+                  className="px-4 py-2.5 bg-brand hover:bg-brand-dark disabled:bg-gray-300 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== INDEPENDENT FEATURE 2: EDITABLE SMART NOTES ==================== */}
+      {activeFeature === 'notes' && (
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-center justify-center z-[110] p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-100">
+            <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-white">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-brand/10 rounded-xl text-brand">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">Smart Notes</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">Edit AI-generated notes, add your own ideas, and save to Knowledge Hub</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveFeature(null)}
+                className="p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="px-5 py-3 bg-gray-50/70 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
               <div className="flex items-center gap-2 flex-1 min-w-0">
-                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider shrink-0">Active Lesson:</span>
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider shrink-0">Lesson:</span>
                 <select
-                  value={agentModule}
-                  onChange={(e) => {
-                    const mod = e.target.value;
-                    setAgentModule(mod);
-                    runOrchestrator(mod);
-                  }}
-                  className="flex-1 min-w-0 text-xs font-medium text-gray-800 bg-white border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand transition-all"
+                  value={featureModule}
+                  onChange={(e) => handleFeatureModuleChange(e.target.value)}
+                  className="flex-1 min-w-0 text-xs font-medium text-gray-800 bg-white border border-gray-200 rounded-xl px-3 py-1.5 outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand"
+                >
+                  {(resources.length > 0 ? resources.map(r => r.module) : topicLegendItems).map((mod, idx) => (
+                    <option key={idx} value={mod}>{mod}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                onClick={() => loadNotesForModule(featureModule)}
+                disabled={featureLoading}
+                className="px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-brand ${featureLoading ? 'animate-spin' : ''}`} />
+                Regenerate
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-3">
+              {featureLoading ? (
+                <div className="py-16 flex flex-col items-center justify-center text-center">
+                  <RefreshCw className="w-7 h-7 text-brand animate-spin mb-2.5" />
+                  <p className="text-sm font-semibold text-gray-700">Preparing your study notes...</p>
+                </div>
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    value={noteTitle}
+                    onChange={(e) => { setNoteTitle(e.target.value); setNoteSaved(false); }}
+                    placeholder="Note title..."
+                    className="w-full text-sm font-bold text-gray-900 bg-white border border-gray-200 rounded-xl px-3.5 py-2 outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand"
+                  />
+
+                  {/* Simple Formatting Toolbar */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-xl">
+                    <div className="flex items-center gap-1">
+                      <button type="button" onClick={() => applyNoteFormatting('bold')} disabled={notePreviewMode} title="Bold" className="p-1.5 rounded-lg hover:bg-white text-gray-600 disabled:opacity-40"><Bold className="w-3.5 h-3.5" /></button>
+                      <button type="button" onClick={() => applyNoteFormatting('italic')} disabled={notePreviewMode} title="Italic" className="p-1.5 rounded-lg hover:bg-white text-gray-600 disabled:opacity-40"><Italic className="w-3.5 h-3.5" /></button>
+                      <button type="button" onClick={() => applyNoteFormatting('heading')} disabled={notePreviewMode} title="Heading" className="p-1.5 rounded-lg hover:bg-white text-gray-600 disabled:opacity-40"><Heading2 className="w-3.5 h-3.5" /></button>
+                      <button type="button" onClick={() => applyNoteFormatting('bullet')} disabled={notePreviewMode} title="Bullet List" className="p-1.5 rounded-lg hover:bg-white text-gray-600 disabled:opacity-40"><List className="w-3.5 h-3.5" /></button>
+                      <button type="button" onClick={() => applyNoteFormatting('numbered')} disabled={notePreviewMode} title="Numbered List" className="p-1.5 rounded-lg hover:bg-white text-gray-600 disabled:opacity-40"><ListOrdered className="w-3.5 h-3.5" /></button>
+                    </div>
+                    <div className="flex items-center gap-1 bg-gray-200/70 p-0.5 rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => setNotePreviewMode(false)}
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 ${!notePreviewMode ? 'bg-white text-brand shadow-2xs' : 'text-gray-600'}`}
+                      >
+                        <Edit3 className="w-3 h-3" /> Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNotePreviewMode(true)}
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 ${notePreviewMode ? 'bg-white text-brand shadow-2xs' : 'text-gray-600'}`}
+                      >
+                        <Eye className="w-3 h-3" /> Preview
+                      </button>
+                    </div>
+                  </div>
+
+                  {notePreviewMode ? (
+                    <div className="min-h-[260px] p-4 rounded-xl border border-gray-200 bg-gray-50/50 space-y-2 text-xs text-gray-800 leading-relaxed">
+                      {noteContent.split('\n').map((line, i) => {
+                        const trimmed = line.trim();
+                        if (!trimmed) return <div key={i} className="h-1.5" />;
+                        if (trimmed.startsWith('### ')) return <h4 key={i} className="text-xs font-bold text-gray-900 uppercase tracking-wider pt-1">{trimmed.slice(4)}</h4>;
+                        if (trimmed.startsWith('## ')) return <h3 key={i} className="text-sm font-bold text-gray-900">{trimmed.slice(3)}</h3>;
+                        if (trimmed.startsWith('- ') || trimmed.startsWith('• ')) return <p key={i} className="pl-3">• {trimmed.slice(2)}</p>;
+                        return <p key={i}>{trimmed.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*]+)\*/g, '$1')}</p>;
+                      })}
+                    </div>
+                  ) : (
+                    <textarea
+                      ref={noteTextareaRef}
+                      value={noteContent}
+                      onChange={(e) => { setNoteContent(e.target.value); setNoteSaved(false); }}
+                      rows={12}
+                      placeholder="Edit these notes or add your own thoughts..."
+                      className="w-full text-xs text-gray-800 leading-relaxed bg-white border border-gray-200 rounded-xl p-3.5 outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand resize-y font-sans"
+                    />
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="px-5 py-3.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between">
+              <span className="text-[11px] text-gray-400">Saved notes appear in Knowledge Hub → Study Notes</span>
+              <button
+                onClick={handleSaveStudyNoteToHub}
+                disabled={featureLoading || noteSaved || !noteContent.trim()}
+                className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                  noteSaved
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    : 'bg-brand hover:bg-brand-dark text-white shadow-xs'
+                }`}
+              >
+                {noteSaved ? <Check className="w-3.5 h-3.5" /> : <Bookmark className="w-3.5 h-3.5" />}
+                {noteSaved ? 'Saved to Knowledge Hub' : 'Save to Study Notes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== INDEPENDENT FEATURE 3: 3-LEVEL ADAPTIVE QUIZ ==================== */}
+      {activeFeature === 'quiz' && (
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-center justify-center z-[110] p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-100">
+            <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-white">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-brand/10 rounded-xl text-brand">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">Concept Quiz</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">Adaptive questions tailored to your progress across 3 difficulty levels</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveFeature(null)}
+                className="p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="px-5 py-3 bg-gray-50/70 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider shrink-0">Lesson:</span>
+                <select
+                  value={featureModule}
+                  onChange={(e) => handleFeatureModuleChange(e.target.value)}
+                  className="flex-1 min-w-0 text-xs font-medium text-gray-800 bg-white border border-gray-200 rounded-xl px-3 py-1.5 outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand"
                 >
                   {(resources.length > 0 ? resources.map(r => r.module) : topicLegendItems).map((mod, idx) => (
                     <option key={idx} value={mod}>{mod}</option>
@@ -1139,303 +1563,274 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 </select>
               </div>
 
+              {/* 3-Level Difficulty Switcher: Easy / Medium / Hard */}
+              <div className="flex items-center gap-1 bg-gray-200/70 p-1 rounded-xl shrink-0">
+                {(['easy', 'medium', 'hard'] as const).map((lvl) => (
+                  <button
+                    key={lvl}
+                    type="button"
+                    onClick={() => {
+                      setQuizDifficulty(lvl);
+                      loadQuizForModule(featureModule, lvl);
+                    }}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold capitalize transition-all ${
+                      quizDifficulty === lvl
+                        ? 'bg-white text-brand shadow-xs font-bold'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    {lvl}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {featureLoading ? (
+                <div className="py-16 flex flex-col items-center justify-center text-center">
+                  <RefreshCw className="w-7 h-7 text-brand animate-spin mb-2.5" />
+                  <p className="text-sm font-semibold text-gray-700">Generating {quizDifficulty} quiz...</p>
+                </div>
+              ) : quizData ? (
+                <>
+                  <div className="flex items-center justify-between bg-blue-50/50 border border-blue-100 px-4 py-3 rounded-xl">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-brand block">
+                        {quizDifficulty.toUpperCase()} Level Check
+                      </span>
+                      <h4 className="text-sm font-bold text-gray-900">{quizData.title}</h4>
+                    </div>
+                    <span className="text-xs font-bold text-brand bg-white px-3 py-1 rounded-lg border border-blue-100 shadow-xs">
+                      Score: {quizData.questions.filter(q => selectedAnswers[q.id] === q.correctIndex).length} / {quizData.questions.length}
+                    </span>
+                  </div>
+
+                  {quizData.questions.map((q, qIdx) => {
+                    const picked = selectedAnswers[q.id];
+                    const isAnswered = picked !== undefined;
+                    return (
+                      <div key={q.id} className="p-4 rounded-xl border border-gray-200 bg-white shadow-xs space-y-3">
+                        <p className="text-sm font-bold text-gray-900 leading-snug">
+                          <span className="text-brand mr-1.5">Q{qIdx + 1}.</span>
+                          {q.question}
+                        </p>
+                        <div className="space-y-2">
+                          {q.options.map((opt, optIdx) => {
+                            const isThisPicked = picked === optIdx;
+                            const isThisCorrect = q.correctIndex === optIdx;
+                            let btnStyle = 'border-gray-200 hover:border-brand/40 hover:bg-gray-50 text-gray-700';
+                            if (isAnswered) {
+                              if (isThisCorrect) btnStyle = 'border-emerald-500 bg-emerald-50 text-emerald-900 font-semibold';
+                              else if (isThisPicked) btnStyle = 'border-rose-300 bg-rose-50 text-rose-800';
+                              else btnStyle = 'border-gray-100 bg-gray-50/50 text-gray-400';
+                            }
+                            return (
+                              <button
+                                key={optIdx}
+                                onClick={() => setSelectedAnswers(prev => ({ ...prev, [q.id]: optIdx }))}
+                                className={`w-full text-left px-3.5 py-2.5 rounded-xl border text-xs leading-relaxed transition-all flex items-start gap-2.5 ${btnStyle}`}
+                              >
+                                <span className="font-bold text-[10px] uppercase w-4 h-4 rounded border border-gray-300 flex items-center justify-center shrink-0 mt-0.5">
+                                  {String.fromCharCode(65 + optIdx)}
+                                </span>
+                                <span className="flex-1">{opt}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {isAnswered && (
+                          <div className={`p-3 rounded-xl text-xs leading-relaxed border ${
+                            picked === q.correctIndex
+                              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                              : 'bg-amber-50 border border-amber-200 text-amber-900'
+                          }`}>
+                            <span className="font-bold uppercase text-[10px] block mb-0.5">
+                              {picked === q.correctIndex ? '✓ Correct' : '💡 Explanation'}
+                            </span>
+                            {q.explanation}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== INDEPENDENT FEATURE 4: FLASHCARDS ==================== */}
+      {activeFeature === 'flashcards' && (
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-center justify-center z-[110] p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-100">
+            <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-white">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-brand/10 rounded-xl text-brand">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">Flashcards</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">Click any card to flip between the term and explanation</p>
+                </div>
+              </div>
               <button
-                onClick={() => runOrchestrator(agentModule)}
-                disabled={agentLoading}
-                className="px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all shadow-2xs shrink-0"
+                onClick={() => setActiveFeature(null)}
+                className="p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
               >
-                <RefreshCw className={`w-3.5 h-3.5 text-brand ${agentLoading ? 'animate-spin' : ''}`} />
-                Re-Orchestrate
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Body */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-5">
-              {agentLoading ? (
+            <div className="px-5 py-3 bg-gray-50/70 border-b border-gray-100 flex items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider shrink-0">Lesson:</span>
+                <select
+                  value={featureModule}
+                  onChange={(e) => handleFeatureModuleChange(e.target.value)}
+                  className="flex-1 min-w-0 text-xs font-medium text-gray-800 bg-white border border-gray-200 rounded-xl px-3 py-1.5 outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand"
+                >
+                  {(resources.length > 0 ? resources.map(r => r.module) : topicLegendItems).map((mod, idx) => (
+                    <option key={idx} value={mod}>{mod}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                onClick={() => loadFlashcardsForModule(featureModule)}
+                disabled={featureLoading}
+                className="px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold rounded-xl flex items-center gap-1.5 shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-brand ${featureLoading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5">
+              {featureLoading ? (
                 <div className="py-16 flex flex-col items-center justify-center text-center">
-                  <RefreshCw className="w-8 h-8 text-brand animate-spin mb-3" />
-                  <p className="text-sm font-bold text-gray-800">Main Orchestrator is analyzing "{agentModule}"...</p>
-                  <p className="text-xs text-gray-400 mt-1">
-                    Selecting optimal primary subagent and dispatching Coach, Smart Notes, Flashcard, and Quiz subagents
-                  </p>
+                  <RefreshCw className="w-7 h-7 text-brand animate-spin mb-2.5" />
+                  <p className="text-sm font-semibold text-gray-700">Building flashcards...</p>
                 </div>
-              ) : orchestratedData ? (
+              ) : flashcardsData ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {flashcardsData.flashcards.map((fc, i) => {
+                    const isFlipped = Boolean(flippedCards[i]);
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setFlippedCards(prev => ({ ...prev, [i]: !prev[i] }))}
+                        className={`text-left p-4 rounded-xl border transition-all min-h-[120px] flex flex-col justify-between ${
+                          isFlipped
+                            ? 'bg-blue-50/40 border-brand/50 shadow-xs'
+                            : 'bg-white border-gray-200 hover:border-brand/40 shadow-xs'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2 mb-1.5 w-full">
+                          <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-gray-100 text-gray-600">
+                            {fc.tag || 'Concept'}
+                          </span>
+                          <span className="text-[10px] font-semibold text-brand">
+                            {isFlipped ? 'Answer (Flip)' : 'Prompt (Flip)'}
+                          </span>
+                        </div>
+                        {isFlipped ? (
+                          <p className="text-xs text-gray-700 leading-relaxed font-medium">{fc.back}</p>
+                        ) : (
+                          <p className="text-xs font-bold text-gray-900 leading-snug">{fc.front}</p>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== INDEPENDENT FEATURE 5: CONCEPT COACH ==================== */}
+      {activeFeature === 'coach' && (
+        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm flex items-center justify-center z-[110] p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-100">
+            <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-white">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-brand/10 rounded-xl text-brand">
+                  <TrendingUp className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">Concept Coach</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">Simple mental models, analogies, and connections to your past lessons</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveFeature(null)}
+                className="p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="px-5 py-3 bg-gray-50/70 border-b border-gray-100 flex items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider shrink-0">Lesson:</span>
+                <select
+                  value={featureModule}
+                  onChange={(e) => handleFeatureModuleChange(e.target.value)}
+                  className="flex-1 min-w-0 text-xs font-medium text-gray-800 bg-white border border-gray-200 rounded-xl px-3 py-1.5 outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand"
+                >
+                  {(resources.length > 0 ? resources.map(r => r.module) : topicLegendItems).map((mod, idx) => (
+                    <option key={idx} value={mod}>{mod}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                onClick={() => loadCoachForModule(featureModule)}
+                disabled={featureLoading}
+                className="px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold rounded-xl flex items-center gap-1.5 shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-brand ${featureLoading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {featureLoading ? (
+                <div className="py-16 flex flex-col items-center justify-center text-center">
+                  <RefreshCw className="w-7 h-7 text-brand animate-spin mb-2.5" />
+                  <p className="text-sm font-semibold text-gray-700">Building intuitive breakdown...</p>
+                </div>
+              ) : coachData ? (
                 <>
-                  {/* Main Orchestrator Decision & Task Allocation Card */}
-                  <div className="p-4 rounded-xl bg-gray-50/80 border border-gray-200/80 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-brand bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
-                          Main Orchestrator Decision
-                        </span>
-                        <span className="text-[11px] font-semibold text-gray-600">
-                          {orchestratedData.orchestrator.lessonProfile.nature} • Difficulty {orchestratedData.orchestrator.lessonProfile.difficulty}/7
-                        </span>
-                      </div>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${
-                        orchestratedData.orchestrator.lessonProfile.isVisited
-                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                          : 'bg-amber-50 text-amber-700 border border-amber-200'
-                      }`}>
-                        {orchestratedData.orchestrator.lessonProfile.isVisited ? '✓ Visited Lesson' : 'New / Active Lesson'}
-                      </span>
+                  <div className="p-4 rounded-xl border border-blue-100 bg-blue-50/40">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-brand block mb-1">Simple Intuition</span>
+                    <p className="text-xs text-gray-800 leading-relaxed font-medium">{coachData.intuition}</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/60">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block mb-1">How It Connects</span>
+                      <p className="text-xs text-gray-700 leading-relaxed">{coachData.prerequisiteBridge}</p>
                     </div>
-
-                    <p className="text-xs text-gray-700 leading-relaxed">
-                      {orchestratedData.orchestrator.reasoning}
-                    </p>
-
-                    {/* Subagent Hierarchy Selector Tabs */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-                      {([
-                        { id: 'coach', label: 'Concept Coach', icon: TrendingUp },
-                        { id: 'notes', label: 'Smart Notes', icon: FileText },
-                        { id: 'flashcards', label: 'Flashcards', icon: BookOpen },
-                        { id: 'quiz', label: 'Concept Quiz', icon: Sparkles },
-                      ] as const).map(tab => {
-                        const isPrimary = orchestratedData.orchestrator.primaryAgent === tab.id;
-                        const isActive = agentTab === tab.id;
-                        const IconComp = tab.icon;
-                        return (
-                          <button
-                            key={tab.id}
-                            onClick={() => setAgentTab(tab.id)}
-                            className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between gap-1 ${
-                              isActive
-                                ? 'bg-white border-brand ring-2 ring-brand/15 shadow-xs'
-                                : 'bg-white/70 border-gray-200 hover:border-gray-300 hover:bg-white'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-1 w-full">
-                              <IconComp className={`w-3.5 h-3.5 ${isActive ? 'text-brand' : 'text-gray-400'}`} />
-                              {isPrimary && (
-                                <span className="text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand text-white">
-                                  Primary
-                                </span>
-                              )}
-                            </div>
-                            <span className={`text-xs font-bold ${isActive ? 'text-gray-900' : 'text-gray-600'}`}>
-                              {tab.label}
-                            </span>
-                          </button>
-                        );
-                      })}
+                    <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/60">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block mb-1">Real-World Analogy</span>
+                      <p className="text-xs text-gray-700 leading-relaxed">{coachData.realWorldAnalogy}</p>
                     </div>
                   </div>
 
-                  {/* Active Subagent Directive Header */}
-                  {(() => {
-                    const activeSubInfo = orchestratedData.orchestrator.subagents.find(s => s.id === agentTab);
-                    return activeSubInfo ? (
-                      <div className="flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl bg-blue-50/40 border border-blue-100 text-xs">
-                        <div className="min-w-0">
-                          <span className="font-bold text-brand mr-1.5">{activeSubInfo.name} Directive:</span>
-                          <span className="text-gray-600">{activeSubInfo.directive}</span>
-                        </div>
-                      </div>
-                    ) : null;
-                  })()}
-
-                  {/* SUBAGENT 1: CONCEPT COACH */}
-                  {agentTab === 'coach' && orchestratedData.outputs.coach && (
-                    <div className="space-y-4">
-                      <div className="p-4 rounded-xl border border-gray-200 bg-white shadow-xs">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-brand block mb-1">Core Mental Model & Intuition</span>
-                        <p className="text-xs text-gray-800 leading-relaxed font-medium">
-                          {orchestratedData.outputs.coach.intuition}
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/60">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block mb-1">Prerequisite Bridge</span>
-                          <p className="text-xs text-gray-700 leading-relaxed">
-                            {orchestratedData.outputs.coach.prerequisiteBridge}
-                          </p>
-                        </div>
-                        <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/60">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block mb-1">Practical Analogy / Example</span>
-                          <p className="text-xs text-gray-700 leading-relaxed">
-                            {orchestratedData.outputs.coach.realWorldAnalogy}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div>
-                        <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Step-by-Step Conceptual Breakdown</h4>
-                        <div className="space-y-2">
-                          {orchestratedData.outputs.coach.stepByStepBreakdown.map((step, i) => (
-                            <div key={i} className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-gray-200 text-xs text-gray-700 leading-relaxed">
-                              <span className="w-5 h-5 rounded-full bg-brand/10 text-brand font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
-                                {i + 1}
-                              </span>
-                              <span>{step}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* SUBAGENT 2: SMART NOTES */}
-                  {agentTab === 'notes' && orchestratedData.outputs.notes && (
-                    <div className="space-y-4">
-                      <div className="p-4 rounded-xl bg-blue-50/40 border border-blue-100">
-                        <div className="flex items-center justify-between gap-2 mb-2">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-brand">Executive Overview</span>
-                          <button
-                            onClick={handleSaveStudyNoteToHub}
-                            disabled={noteSaved}
-                            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                              noteSaved
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-brand hover:bg-brand-dark text-white shadow-xs'
-                            }`}
-                          >
-                            {noteSaved ? <Check className="w-3.5 h-3.5" /> : <Bookmark className="w-3.5 h-3.5" />}
-                            {noteSaved ? 'Saved to Knowledge Hub' : 'Save to Study Notes'}
-                          </button>
-                        </div>
-                        <p className="text-xs text-gray-700 leading-relaxed font-medium">{orchestratedData.outputs.notes.overview}</p>
-                      </div>
-
-                      <div>
-                        <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2.5">Key Lecture Takeaways</h4>
-                        <div className="space-y-2">
-                          {orchestratedData.outputs.notes.takeaways.map((item, i) => (
-                            <div key={i} className="flex items-start gap-2.5 p-3 rounded-xl bg-gray-50 border border-gray-100 text-xs text-gray-700 leading-relaxed">
-                              <span className="w-5 h-5 rounded-full bg-brand/10 text-brand font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
-                                {i + 1}
-                              </span>
-                              <span>{item}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {orchestratedData.outputs.notes.examTip && (
-                        <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200 text-xs text-amber-900 leading-relaxed">
-                          <span className="font-bold uppercase text-[10px] block mb-0.5">💡 Key Mastery Focus</span>
-                          {orchestratedData.outputs.notes.examTip}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* SUBAGENT 3: FLASHCARDS */}
-                  {agentTab === 'flashcards' && orchestratedData.outputs.flashcards && (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                          Active-Recall Flashcards (Click any card to flip)
-                        </h4>
-                        <span className="text-[11px] text-gray-400 font-medium">
-                          {orchestratedData.outputs.flashcards.flashcards.length} cards generated
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {orchestratedData.outputs.flashcards.flashcards.map((fc, i) => {
-                          const isFlipped = Boolean(flippedCards[i]);
-                          return (
-                            <button
-                              key={i}
-                              type="button"
-                              onClick={() => setFlippedCards(prev => ({ ...prev, [i]: !prev[i] }))}
-                              className={`text-left p-4 rounded-xl border transition-all min-h-[115px] flex flex-col justify-between ${
-                                isFlipped
-                                  ? 'bg-blue-50/40 border-brand/50 shadow-xs'
-                                  : 'bg-white border-gray-200 hover:border-brand/40 shadow-xs'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-2 mb-1.5 w-full">
-                                <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-gray-100 text-gray-600">
-                                  {fc.tag || 'Concept'}
-                                </span>
-                                <span className="text-[10px] font-semibold text-brand">
-                                  {isFlipped ? 'Answer (Flip)' : 'Prompt (Flip)'}
-                                </span>
-                              </div>
-                              {isFlipped ? (
-                                <p className="text-xs text-gray-700 leading-relaxed font-medium">{fc.back}</p>
-                              ) : (
-                                <p className="text-xs font-bold text-gray-900 leading-snug">{fc.front}</p>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* SUBAGENT 4: ADAPTIVE QUIZ */}
-                  {agentTab === 'quiz' && orchestratedData.outputs.quiz && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between bg-blue-50/50 border border-blue-100 px-4 py-3 rounded-xl">
-                        <div>
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-brand block">Diagnostic Concept Assessment</span>
-                          <h4 className="text-sm font-bold text-gray-900">{orchestratedData.outputs.quiz.title}</h4>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-xs font-bold text-brand bg-white px-3 py-1 rounded-lg border border-blue-100 shadow-xs">
-                            Score: {orchestratedData.outputs.quiz.questions.filter(q => selectedAnswers[q.id] === q.correctIndex).length} / {orchestratedData.outputs.quiz.questions.length}
+                  <div>
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Step-by-Step Breakdown</h4>
+                    <div className="space-y-2">
+                      {coachData.stepByStepBreakdown.map((step, i) => (
+                        <div key={i} className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-gray-200 text-xs text-gray-700 leading-relaxed">
+                          <span className="w-5 h-5 rounded-full bg-brand/10 text-brand font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                            {i + 1}
                           </span>
+                          <span>{step}</span>
                         </div>
-                      </div>
-
-                      {orchestratedData.outputs.quiz.questions.map((q, qIdx) => {
-                        const picked = selectedAnswers[q.id];
-                        const isAnswered = picked !== undefined;
-                        return (
-                          <div key={q.id} className="p-4 rounded-xl border border-gray-200 bg-white shadow-xs space-y-3">
-                            <p className="text-sm font-bold text-gray-900 leading-snug">
-                              <span className="text-brand mr-1.5">Q{qIdx + 1}.</span>
-                              {q.question}
-                            </p>
-                            <div className="space-y-2">
-                              {q.options.map((opt, optIdx) => {
-                                const isThisPicked = picked === optIdx;
-                                const isThisCorrect = q.correctIndex === optIdx;
-                                let btnStyle = 'border-gray-200 hover:border-brand/40 hover:bg-gray-50 text-gray-700';
-                                if (isAnswered) {
-                                  if (isThisCorrect) {
-                                    btnStyle = 'border-emerald-500 bg-emerald-50 text-emerald-900 font-semibold';
-                                  } else if (isThisPicked) {
-                                    btnStyle = 'border-rose-300 bg-rose-50 text-rose-800';
-                                  } else {
-                                    btnStyle = 'border-gray-100 bg-gray-50/50 text-gray-400';
-                                  }
-                                }
-                                return (
-                                  <button
-                                    key={optIdx}
-                                    onClick={() => setSelectedAnswers(prev => ({ ...prev, [q.id]: optIdx }))}
-                                    className={`w-full text-left px-3.5 py-2.5 rounded-xl border text-xs leading-relaxed transition-all flex items-start gap-2.5 ${btnStyle}`}
-                                  >
-                                    <span className="font-bold text-[10px] uppercase w-4 h-4 rounded border border-gray-300 flex items-center justify-center shrink-0 mt-0.5">
-                                      {String.fromCharCode(65 + optIdx)}
-                                    </span>
-                                    <span className="flex-1">{opt}</span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            {isAnswered && (
-                              <div className={`p-3 rounded-xl text-xs leading-relaxed border ${
-                                picked === q.correctIndex
-                                  ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
-                                  : 'bg-amber-50 border border-amber-200 text-amber-900'
-                              }`}>
-                                <span className="font-bold uppercase text-[10px] block mb-0.5">
-                                  {picked === q.correctIndex ? '✓ Correct' : '💡 Concept Explanation'}
-                                </span>
-                                {q.explanation}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                      ))}
                     </div>
-                  )}
+                  </div>
                 </>
               ) : null}
             </div>

@@ -7,13 +7,11 @@ import NavigatorDashboard from './pages/dashboard/NavigatorDashboard';
 import GridMatrixPage from './pages/dashboard/GridMatrixPage';
 import KnowledgeHubPage from './pages/dashboard/KnowledgeHubPage';
 import { AppProvider } from './context/AppContext';
-import { CustomCursor } from './components/ui/CustomCursor';
 
 function App() {
   return (
     <BrowserRouter>
       <AppProvider>
-        <CustomCursor />
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />

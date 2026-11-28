@@ -325,7 +325,9 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
   };
 
   const renderNeuralRoad = () => {
-    return polylines.filter(p => p.isActive && Array.isArray(p.path) && p.path.length > 0).map(polyline => (
+    return polylines
+      .filter(p => p.isActive && !['current_average', 'high_line'].includes(p.id) && Array.isArray(p.path) && p.path.length > 0)
+      .map(polyline => (
       <svg
         key={polyline.id}
         className="absolute inset-0 w-full h-full pointer-events-none z-[25]"

@@ -248,20 +248,6 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
   // @ts-ignore
   const chatEndRef = React.useRef<HTMLDivElement | null>(null);
 
-  // Tracking agent movement for animation
-  const [prevPosition, setPrevPosition] = useState<GridPosition>(agent.position);
-  const [showTravelArrow, setShowTravelArrow] = useState(false);
-
-  React.useEffect(() => {
-    if (agent.position.x !== prevPosition.x || agent.position.y !== prevPosition.y) {
-      setShowTravelArrow(true);
-      const timer = setTimeout(() => {
-        setShowTravelArrow(false);
-        setPrevPosition(agent.position);
-      }, 1500); // Duration of arrow visibility
-      return () => clearTimeout(timer);
-    }
-  }, [agent.position, prevPosition]);
 
   // Convert YouTube URL to embed URL
   const getYouTubeEmbedUrl = (url: string): string | null => {
@@ -1104,33 +1090,6 @@ export const GridVisualization: React.FC<GridVisualizationProps> = ({
               </div>
             )}
 
-            {showTravelArrow && !currentPositionPoint && (
-              <svg className="absolute inset-0 w-full h-full pointer-events-none z-30">
-                <defs>
-                  <linearGradient id="travelGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stopColor="#ef4444" stopOpacity="0.8" />
-                    <stop offset="100%" stopColor="#ec4899" stopOpacity="0.8" />
-                  </linearGradient>
-                  <marker id="travel-arrowhead" markerWidth="12" markerHeight="8" refX="10" refY="4" orient="auto">
-                    <path d="M0,0 L12,4 L0,8 Z" fill="#ef4444" />
-                  </marker>
-                </defs>
-                <line
-                  x1={`${mapGridPoint(prevPosition).x / MAP_SIZE * 100}%`}
-                  y1={`${mapGridPoint(prevPosition).y / MAP_SIZE * 100}%`}
-                  x2={`${mapGridPoint(agent.position).x / MAP_SIZE * 100}%`}
-                  y2={`${mapGridPoint(agent.position).y / MAP_SIZE * 100}%`}
-                  stroke="url(#travelGradient)"
-                  strokeWidth="4"
-                  strokeDasharray="12 6"
-                  className="animate-pulse"
-                  markerEnd="url(#travel-arrowhead)"
-                  opacity="0.8"
-                >
-                  <animate attributeName="stroke-dashoffset" from="100" to="0" dur="2s" repeatCount="indefinite" />
-                </line>
-              </svg>
-            )}
           </div>
         </div>
       </div>
